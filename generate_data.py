@@ -353,7 +353,7 @@ def generate_data():
     m = len(chosen_marker_set)
 
     # define the path of info file in surreal dataset and the path to save markers and poses
-    for name in ['train', 'val', 'test']:
+    for name in ['train']:
         dataset = {}
         markers = []
         thetas = []
@@ -361,7 +361,7 @@ def generate_data():
         genders = []
         joints = []
 
-        data_path = glob.glob(os.path.join(args.basic_path, 'cmu', name, 'run1', '*', '*info.mat'))   
+        data_path = glob.glob(os.path.join(args.basic_path, 'dataset-amass', name, '*', '*.npz'))   
         data_path.sort() 
         # print(data_path)
 
@@ -372,72 +372,75 @@ def generate_data():
         # print(face.shape)
 
         # generate marker and pose files in specific range
-        for i in range(len(data_path)):
+        for i in range(1):
             subject = data_path[i].split('/')[-2]
-            seq = data_path[i].split('/')[-1].rsplit('_')[-2]
+            seq = data_path[i].split('/')[-1].split('.')[0]
             print('Processing the data for sequence {} of subject {} in {} set...'.format(seq, subject, name))
 
-            database = scio.loadmat(data_path[i])
-            beta = np.array(database['shape'].T)                            # shape parameters with size of (f, 10)
-            theta = np.array(database['pose'].T)                            # pose parameters with size of (f, 72)
-            gender = np.array(database['gender'])                           # 0: 'female', 1: 'male', gender with size of (f, 1)
-            joint = np.array(database['joints3D'].T)                        # 3D coordinates of joints with size of (f, 24, 3)
-            if joint.ndim != 3:
-                joint = joint[:, :, None]
-            # print(beta.shape, theta.shape, gender.shape, joint.shape)
+            database = np.load(data_path[i])
+            print(database.files)
 
-            f = theta.shape[0]
-            marker = np.zeros((f, m, 3))                                    # (f, m, 3)
+        #     database = scio.loadmat(data_path[i])
+        #     beta = np.array(database['shape'].T)                            # shape parameters with size of (f, 10)
+        #     theta = np.array(database['pose'].T)                            # pose parameters with size of (f, 72)
+        #     gender = np.array(database['gender'])                           # 0: 'female', 1: 'male', gender with size of (f, 1)
+        #     joint = np.array(database['joints3D'].T)                        # 3D coordinates of joints with size of (f, 24, 3)
+        #     if joint.ndim != 3:
+        #         joint = joint[:, :, None]
+        #     # print(beta.shape, theta.shape, gender.shape, joint.shape)
 
-            # add noise
-            cur_m2b_distance = m2b_distance + abs(np.random.normal(0, m2b_distance / 3., size=[3])) 
+        #     f = theta.shape[0]
+        #     marker = np.zeros((f, m, 3))                                    # (f, m, 3)
 
-            for fIdx in range(f):
-                model.theta[:] = theta[fIdx, :].reshape(24, 3)
-                model.beta[:] = beta[fIdx, :]
-                model.update()
-                vertex = rotate_mesh(model.verts, 90)
-                vertex = model.verts
+        #     # add noise
+        #     cur_m2b_distance = m2b_distance + abs(np.random.normal(0, m2b_distance / 3., size=[3])) 
 
-                vn = compute_vertex_normal(torch.Tensor(vertex), torch.Tensor(face))
+        #     for fIdx in range(f):
+        #         model.theta[:] = theta[fIdx, :].reshape(24, 3)
+        #         model.beta[:] = beta[fIdx, :]
+        #         model.update()
+        #         vertex = rotate_mesh(model.verts, 90)
+        #         vertex = model.verts
 
-                for mrk_id, vid in enumerate(chosen_marker_set.values()):
-                    marker[fIdx, mrk_id, :] = torch.Tensor(vertex[vid]) + torch.Tensor(cur_m2b_distance) * vn[vid]
+        #         vn = compute_vertex_normal(torch.Tensor(vertex), torch.Tensor(face))
+
+        #         for mrk_id, vid in enumerate(chosen_marker_set.values()):
+        #             marker[fIdx, mrk_id, :] = torch.Tensor(vertex[vid]) + torch.Tensor(cur_m2b_distance) * vn[vid]
                 
-            print('Successfully generate marker for the No.{} file of total {} files in {} set!'.format(
-                i+1, len(data_path), name))    
+        #     print('Successfully generate marker for the No.{} file of total {} files in {} set!'.format(
+        #         i+1, len(data_path), name))    
 
-            marker = marker.astype(np.float32)  
-            marker = marker.reshape(f, -1)                                      # (f, m*3)
-            joint = joint.reshape(f, -1)                                        # (f, 24*3)
+        #     marker = marker.astype(np.float32)  
+        #     marker = marker.reshape(f, -1)                                      # (f, m*3)
+        #     joint = joint.reshape(f, -1)                                        # (f, 24*3)
 
-            # print(marker.shape, theta.shape, beta.shape, gender.shape, joint.shape)
-            markers.append(marker)
-            thetas.append(theta)
-            betas.append(beta)
-            genders.append(gender)
-            joints.append(joint)
+        #     # print(marker.shape, theta.shape, beta.shape, gender.shape, joint.shape)
+        #     markers.append(marker)
+        #     thetas.append(theta)
+        #     betas.append(beta)
+        #     genders.append(gender)
+        #     joints.append(joint)
 
-        marker = np.vstack(markers)                                         # (f, m*3)
-        marker = marker.reshape(-1, m, 3)                                   # (f, m, 3)
-        theta = np.vstack(thetas)                                           # (f, 72)
-        theta = theta.reshape(-1, 24, 3)                                    # (f, 24, 3)
-        beta = np.vstack(betas)                                             # (f, 10)
-        gender = np.vstack(genders)                                         # (f, 1)
-        joint = np.vstack(joints)                                           # (f, 24*3)
-        joint = joint.reshape(-1, 24, 3)                                    # (f, 24, 3)
+        # marker = np.vstack(markers)                                         # (f, m*3)
+        # marker = marker.reshape(-1, m, 3)                                   # (f, m, 3)
+        # theta = np.vstack(thetas)                                           # (f, 72)
+        # theta = theta.reshape(-1, 24, 3)                                    # (f, 24, 3)
+        # beta = np.vstack(betas)                                             # (f, 10)
+        # gender = np.vstack(genders)                                         # (f, 1)
+        # joint = np.vstack(joints)                                           # (f, 24*3)
+        # joint = joint.reshape(-1, 24, 3)                                    # (f, 24, 3)
 
-        # print(marker.shape, theta.shape, beta.shape, gender.shape, joint.shape)
+        # # print(marker.shape, theta.shape, beta.shape, gender.shape, joint.shape)
 
-        dataset['label'] = label
-        dataset['marker'] = marker
-        dataset['theta'] = theta
-        dataset['beta'] = beta
-        dataset['gender'] = gender
-        dataset['joint'] = joint
+        # dataset['label'] = label
+        # dataset['marker'] = marker
+        # dataset['theta'] = theta
+        # dataset['beta'] = beta
+        # dataset['gender'] = gender
+        # dataset['joint'] = joint
 
-        np.save(os.path.join(args.basic_path, 'dataset-amass', name + '_' + str(m) + '.npy'), dataset)
-        print('Successfully save {} data, and the total number of frames is {}!'.format(name, marker.shape[0]))
+        # np.save(os.path.join(args.data_path, name + '_' + str(m) + '.npy'), dataset)
+        # print('Successfully save {} data, and the total number of frames is {}!'.format(name, marker.shape[0]))
 
 
 if __name__ == '__main__':

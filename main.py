@@ -155,8 +155,8 @@ def attach_placeholder(X):
     return torch.cat((placeholder, X), dim=1)
 
 
-def get_data_loader(basic_path, batch_size, mode, m, interval):
-    data = np.load(os.path.join(basic_path, 'dataset-amass', mode + '_' + str(m) + '.npy'), allow_pickle=True).item()
+def get_data_loader(data_path, batch_size, mode, m, interval):
+    data = np.load(os.path.join(data_path, mode + '_' + str(m) + '.npy'), allow_pickle=True).item()
     print('Successfully load data from ' + mode + '_' + str(m) + '.npy!')
 
     marker = torch.Tensor(data['marker'])[::interval].to(torch.float32)       # (f, m, 3)
@@ -568,8 +568,8 @@ def main():
             f.write(str(model))
             f.writelines('----------- end ----------' + '\n')
         
-        dl_train = get_data_loader(args.basic_path, args.batch_size, 'train', args.m, 20)
-        dl_val = get_data_loader(args.basic_path, args.batch_size, 'val', args.m, 1)
+        dl_train = get_data_loader(args.data_path, args.batch_size, 'train', args.m, 20)
+        dl_val = get_data_loader(args.data_path, args.batch_size, 'val', args.m, 1)
 
         # create optimizer and scheduler
         optimizer = AdamW(model.parameters(), lr=args.base_lr, betas=(0.9, 0.98), eps=1e-9)
@@ -588,7 +588,7 @@ def main():
         checkpoint = torch.load(model_path)
         model.load_state_dict(checkpoint['model'])
         print('Successfully load checkpoint of model!')
-        dl_test = get_data_loader(args.basic_path, args.batch_size, 'test', args.m, 10)
+        dl_test = get_data_loader(args.data_path, args.batch_size, 'test', args.m, 10)
         mpjpe, mpvpe = test(model, dl_test, device, args)
         print(' - mpjpe: {:6.4f}, mpvpe: {:6.4f}'.format(mpjpe, mpvpe))
 
