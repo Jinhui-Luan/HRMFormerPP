@@ -353,8 +353,8 @@ def generate_data():
     m = len(chosen_marker_set)
 
     # define the path of info file in surreal dataset and the path to save markers and poses
-    for name in ['val', 'test', 'train']:
-        # dataset = {}
+    for name in ['train']:
+        dataset = {}
         markers = []
         thetas = []
         betas = []
@@ -428,12 +428,12 @@ def generate_data():
             genders.append(gender)
 
 
-        marker = np.array(markers).astype(np.float32)
-        vertex = np.array(vertices).astype(np.float32)
-        joint = np.array(joints).astype(np.float32)
-        theta = np.array(thetas).astype(np.float32)
-        beta = np.array(betas).astype(np.float32)
-        gender = np.array(genders).astype(np.int8)
+        marker = np.array(markers)
+        vertex = np.array(vertices)
+        joint = np.array(joints)
+        theta = np.array(thetas)
+        beta = np.array(betas)
+        gender = np.array(genders)
         
         # marker = np.vstack(markers)                                         # (f, m*3)
         # marker = marker.reshape(-1, m, 3)                                   # (f, m, 3)
@@ -444,23 +444,25 @@ def generate_data():
         # joint = np.vstack(joints)                                           # (f, 24*3)
         # joint = joint.reshape(-1, 24, 3)                                    # (f, 24, 3)
 
-        print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
+        # print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
 
-        # dataset['label'] = label
-        # dataset['marker'] = marker
-        # dataset['vertex'] = vertex
-        # dataset['joint'] = joint
-        # dataset['theta'] = theta
-        # dataset['beta'] = beta
-        # dataset['gender'] = gender
+        dataset['label'] = label
+        dataset['marker'] = torch.from_numpy(marker).to(torch.float32)
+        dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)
+        dataset['joint'] = torch.from_numpy(joint).to(torch.float32)
+        dataset['theta'] = torch.from_numpy(theta).to(torch.float32)
+        dataset['beta'] = torch.from_numpy(beta).to(torch.float32)
+        dataset['gender'] = torch.from_numpy(gender).to(torch.int32)
 
-        np.savez_compressed(os.path.join(args.data_path, name + '_' + str(m) + '.npz'), label=label, marker=marker, vertex=vertex, joint=joint, theta=theta, beta=beta, gender=gender)
+        torch.save(dataset, os.path.join(args.data_path, name + '_' + str(m) + '.pt'), pickle_protocol=4)
         print('Successfully save {} data, and the total number of sequences is {}!'.format(name, marker.shape[0]))
 
 
 if __name__ == '__main__':
-    # generate_data()
+    generate_data()
     # save2file()
-    data = np.load('./data/val_67.npz', allow_pickle=True)
-    marker = data['marker']
-    print(data.files)
+    # data = torch.load('./data/train_67.pt')
+    # print(data.keys())
+    # marker = data['marker']
+    # print(marker.shape)
+    # print(data['label'])
