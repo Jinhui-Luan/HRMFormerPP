@@ -353,8 +353,8 @@ def generate_data():
     m = len(chosen_marker_set)
 
     # define the path of info file in surreal dataset and the path to save markers and poses
-    for name in ['test', 'val', 'train']:
-        dataset = {}
+    for name in ['val', 'test', 'train']:
+        # dataset = {}
         markers = []
         thetas = []
         betas = []
@@ -446,18 +446,21 @@ def generate_data():
 
         print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
 
-        dataset['label'] = label
-        dataset['marker'] = marker
-        dataset['vertex'] = vertex
-        dataset['joint'] = joint
-        dataset['theta'] = theta
-        dataset['beta'] = beta
-        dataset['gender'] = gender
+        # dataset['label'] = label
+        # dataset['marker'] = marker
+        # dataset['vertex'] = vertex
+        # dataset['joint'] = joint
+        # dataset['theta'] = theta
+        # dataset['beta'] = beta
+        # dataset['gender'] = gender
 
-        np.savez(os.path.join(args.data_path, name + '_' + str(m) + '.npz'), dataset)
+        np.savez_compressed(os.path.join(args.data_path, name + '_' + str(m) + '.npz'), label=label, marker=marker, vertex=vertex, joint=joint, theta=theta, beta=beta, gender=gender)
         print('Successfully save {} data, and the total number of sequences is {}!'.format(name, marker.shape[0]))
 
 
 if __name__ == '__main__':
-    generate_data()
+    # generate_data()
     # save2file()
+    data = np.load('./data/val_67.npz', allow_pickle=True)
+    marker = data['marker']
+    print(data.files)
