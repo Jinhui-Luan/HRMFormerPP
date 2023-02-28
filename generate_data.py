@@ -353,7 +353,7 @@ def generate_data():
     m = len(chosen_marker_set)
 
     # define the path of info file in surreal dataset and the path to save markers and poses
-    for name in ['train', 'test', 'val']:
+    for name in ['test', 'val', 'train']:
         dataset = {}
         markers = []
         thetas = []
@@ -454,7 +454,7 @@ def generate_data():
         dataset['beta'] = beta
         dataset['gender'] = gender
 
-        np.save(os.path.join(args.data_path, name + '_' + str(m) + '.npy'), dataset)
+        np.savez(os.path.join(args.data_path, name + '_' + str(m) + '.npz'), dataset)
         print('Successfully save {} data, and the total number of sequences is {}!'.format(name, marker.shape[0]))
 
 
