@@ -171,9 +171,9 @@ def get_data_loader(data_path, batch_size, mode, m, interval):
     joint = torch.Tensor(data['joint'])[::interval].to(torch.float32)           # (n_seq, f, j, 3)
 
     for i in range(marker.shape[0]):
-        marker[i,:, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
+        marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
 
-    print('{} Dataset shape: {}.'.format(mode, marker.shape))
+    print('{} dataset shape: {}.'.format(mode, marker.shape).capitalize())
 
     dataset = MyDataset(marker, theta, beta, vertex, joint)
     if mode == 'train':
