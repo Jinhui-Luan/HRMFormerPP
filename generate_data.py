@@ -353,7 +353,7 @@ def generate_data():
     m = len(chosen_marker_set)
 
     # define the path of info file in surreal dataset and the path to save markers and poses
-    for name in ['train']:
+    for name in ['test', 'val']:
         dataset = {}
         markers = []
         thetas = []
