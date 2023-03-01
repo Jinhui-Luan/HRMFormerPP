@@ -154,27 +154,28 @@ def weight_init(m):
         # nn.init.constant_(m.bias, 0)
 
 
-# def attach_placeholder(X):
-#     ''' add <start> and <end> placeholder '''
-#     placeholder = torch.zeros((X.shape[0], 1, X.shape[2]), dtype=torch.float32, device=X.device, requires_grad=True)
-#     return torch.cat((placeholder, X), dim=1)
+def attach_placeholder(X):
+    ''' add <start> and <end> placeholder '''
+    placeholder = torch.zeros((X.shape[0], 1, X.shape[2]), dtype=torch.float32, device=X.device, requires_grad=True)
+    return torch.cat((placeholder, X), dim=1)
 
 
 def get_data_loader(data_path, batch_size, mode, m, interval):
     data = np.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'), allow_pickle=True).item()
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
 
-    marker = torch.Tensor(data['marker'])[::interval].to(torch.float32)       # (f, m, 3)
-    theta = torch.Tensor(data['theta'])[::interval].to(torch.float32)         # (f, j, 3)
-    beta = torch.Tensor(data['beta'])[::interval].to(torch.float32)           # (f, 10)
+    marker = torch.Tensor(data['marker'])[::interval].to(torch.float32)         # (n_seq, f, m, 3)
+    theta = torch.Tensor(data['theta'])[::interval].to(torch.float32)           # (n_seq, f, j, 3)
+    beta = torch.Tensor(data['beta'])[::interval].to(torch.float32)             # (n_seq, f, 10)
+    vertex = torch.Tensor(data['vertex'])[::interval].to(torch.float32)         # (n_seq, f, v, 3)
+    joint = torch.Tensor(data['joint'])[::interval].to(torch.float32)           # (n_seq, f, j, 3)
 
     for i in range(marker.shape[0]):
-        marker[i, :, :] = marker[i, torch.randperm(marker.shape[1]), :]
+        marker[i,:, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
 
-    print('Dataset shape: marker with size of {}, theta with size of {}.'.format(
-            marker.shape, theta.shape))
+    print('{} Dataset shape: {}.'.format(mode, marker.shape))
 
-    dataset = MyDataset(marker, theta, beta)
+    dataset = MyDataset(marker, theta, beta, vertex, joint)
     if mode == 'train':
         dataloader = DataLoader(dataset, batch_size, shuffle=True)
     else:
@@ -211,7 +212,7 @@ def load_checkpoint(model, args, device, start_epoch, scheduler=None):
 
 def cal_data_loss(x1, x2, rate, criterion):
     '''
-    x1 & x1: pose parameters theta of SMPL model with shape of [B, J, 3]
+    x1 & x1: pose parameters theta of SMPL model with shape of [bs, 24, 3]
     rate: the rate of the weight between parent and child nodes
     criterion: the criterion for calculating loss
     return: the data term of loss
