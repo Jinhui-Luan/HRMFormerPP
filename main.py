@@ -20,10 +20,12 @@ from option import BaseOptionParser
 
 
 class MyDataset(Dataset):
-    def __init__(self, marker, theta, beta):
+    def __init__(self, marker, theta, beta, vertex, joint):
         self.marker = marker
         self.theta = theta
         self.beta = beta
+        self.vertex = vertex
+        self.joint = joint
 
     def __len__(self):
         return len(self.marker)
@@ -32,7 +34,9 @@ class MyDataset(Dataset):
         return {
             'marker': self.marker[index],
             'theta': self.theta[index],
-            'beta': self.beta[index]
+            'beta': self.beta[index],
+            'vertex': self.vertex[index],
+            'joint': self.joint[index]
         }
 
 
@@ -149,15 +153,16 @@ def weight_init(m):
         nn.init.kaiming_uniform_(m.weight)
         # nn.init.constant_(m.bias, 0)
 
-def attach_placeholder(X):
-    ''' add <start> and <end> placeholder '''
-    placeholder = torch.zeros((X.shape[0], 1, X.shape[2]), dtype=torch.float32, device=X.device, requires_grad=True)
-    return torch.cat((placeholder, X), dim=1)
+
+# def attach_placeholder(X):
+#     ''' add <start> and <end> placeholder '''
+#     placeholder = torch.zeros((X.shape[0], 1, X.shape[2]), dtype=torch.float32, device=X.device, requires_grad=True)
+#     return torch.cat((placeholder, X), dim=1)
 
 
 def get_data_loader(data_path, batch_size, mode, m, interval):
-    data = np.load(os.path.join(data_path, mode + '_' + str(m) + '.npy'), allow_pickle=True).item()
-    print('Successfully load data from ' + mode + '_' + str(m) + '.npy!')
+    data = np.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'), allow_pickle=True).item()
+    print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
 
     marker = torch.Tensor(data['marker'])[::interval].to(torch.float32)       # (f, m, 3)
     theta = torch.Tensor(data['theta'])[::interval].to(torch.float32)         # (f, j, 3)

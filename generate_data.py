@@ -447,11 +447,11 @@ def generate_data():
         # print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
 
         dataset['label'] = label
-        dataset['marker'] = torch.from_numpy(marker).to(torch.float32)
-        dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)
-        dataset['joint'] = torch.from_numpy(joint).to(torch.float32)
-        dataset['theta'] = torch.from_numpy(theta).to(torch.float32)
-        dataset['beta'] = torch.from_numpy(beta).to(torch.float32)
+        dataset['marker'] = torch.from_numpy(marker).to(torch.float32)          # (n_seq, f, m, 3)
+        dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)          # (n_seq, f, v, 3)
+        dataset['joint'] = torch.from_numpy(joint).to(torch.float32)            # (n_seq, f, j, 3)
+        dataset['theta'] = torch.from_numpy(theta).to(torch.float32)            # (n_seq, f, 72)
+        dataset['beta'] = torch.from_numpy(beta).to(torch.float32)              # (n_seq, f, 10)
         dataset['gender'] = torch.from_numpy(gender).to(torch.int32)
 
         torch.save(dataset, os.path.join(args.data_path, name + '_' + str(m) + '.pt'), pickle_protocol=4)
@@ -459,10 +459,9 @@ def generate_data():
 
 
 if __name__ == '__main__':
-    generate_data()
+    # generate_data()
     # save2file()
-    # data = torch.load('./data/train_67.pt')
-    # print(data.keys())
-    # marker = data['marker']
-    # print(marker.shape)
-    # print(data['label'])
+    data = torch.load('./data/train_67.pt')
+    print(data.keys())
+    print(data['marker'].shape, data['vertex'].shape, data['joint'].shape, data['theta'].shape, data['beta'].shape)
+    print(data['label'])
