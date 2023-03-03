@@ -161,7 +161,7 @@ def attach_placeholder(X):
 
 
 def get_data_loader(data_path, batch_size, mode, m, interval):
-    data = np.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'), allow_pickle=True).item()
+    data = torch.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'))
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
 
     marker = torch.Tensor(data['marker'])[::interval].to(torch.float32)         # (n_seq, f, m, 3)
@@ -210,9 +210,9 @@ def load_checkpoint(model, args, device, start_epoch, scheduler=None):
     return epoch
 
 
-def cal_data_loss(x1, x2, rate, criterion):
+def weighted_MSE_loss(x1, x2, rate, criterion):
     '''
-    x1 & x1: pose parameters theta of SMPL model with shape of [bs, 24, 3]
+    x1 & x2: pose parameters theta of SMPL model with shape of [bs, f, 24, 3]
     rate: the rate of the weight between parent and child nodes
     criterion: the criterion for calculating loss
     return: the data term of loss
@@ -228,11 +228,11 @@ def cal_data_loss(x1, x2, rate, criterion):
         # print(i, part, rate ** i)
         for idx in part:
             # print(idx)
-            l = criterion(x1[:, idx, :], x2[:, idx, :]) * rate ** i
+            l = criterion(x1[:, :, idx, :], x2[:, :, idx, :]) * rate ** i
             # IPython.embed()
             loss += l
         
-    return loss / x1.shape[1]
+    return loss / x1.shape[2]
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
@@ -325,36 +325,33 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion, devic
 
     desc = ' - (Training)   '
     for data in tqdm(dataloader_train, mininterval=2, desc=desc, leave=False, ncols=100):
-        marker = data['marker'].to(device)
-        theta = data['theta'].to(device)
-        beta = data['beta'].to(device)
+        marker = data['marker'].to(device)                          # (bs, f, m, 3)
+        theta = data['theta'].to(device)                            # (bs, f, spa_n_q, 3)
+        beta = data['beta'].to(device)                              # (bs, f, 10)
+        vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
+        joint = data['joint'].to(device)                            # (bs, f, 24, 3)
 
+        bs, f, _, _ = marker.shape
         scheduler.optimizer.zero_grad()
-        theta_pred = model(marker)
-        
-        smpl_model(beta, theta_pred)
-        joint_pred = smpl_model.joints
-        vertex_pred = smpl_model.verts
+        theta_pred = model(marker)                                  # (bs, f, spa_n_q, 3)
 
-        smpl_model(beta, theta)
-        joint = smpl_model.joints
-        vertex = smpl_model.verts
+        smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
+        joint_pred = smpl_model.joints.reshape(bs, f, 24, 3)      
+        vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3)
 
         mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
         mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
 
         # l_data = args.lambda1 * criterion(theta_pred, theta)
-        l_data = args.lambda1 * cal_data_loss(theta_pred, theta, args.rate, criterion)
-        # l_data = 0
-        # IPython.embed()
-
+        l_data = args.lambda1 * weighted_MSE_loss(theta_pred, theta, args.rate, criterion)
         l_joint = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
         l_vertex = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l = l_data + l_joint + l_vertex
+
         l.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         scheduler.batch_step()
-        
+
         loss.append(l)
         loss_data.append(l_data)
         loss_joint.append(l_joint)
@@ -384,33 +381,31 @@ def val_epoch(model, smpl_model, dataloader_val, criterion, device, args):
             marker = data['marker'].to(device)
             theta = data['theta'].to(device)
             beta = data['beta'].to(device)
+            vertex = data['vertex'].to(device)
+            joint = data['joint'].to(device)
+
+            bs, f, _, _ = marker.shape
 
             theta_pred = model(marker)
 
-            smpl_model(beta, theta_pred)
-            joint_pred = smpl_model.joints
-            vertex_pred = smpl_model.verts
-
-            smpl_model(beta, theta)
-            joint = smpl_model.joints
-            vertex = smpl_model.verts
+            smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
+            joint_pred = smpl_model.joints.reshape(bs, f, 24, 3)
+            vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3)
 
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
 
             # l_data = args.lambda1 * criterion(theta_pred, theta)
-            l_data = args.lambda1 * cal_data_loss(theta_pred, theta, args.rate, criterion)
-            # l_data = 0
-
+            l_data = args.lambda1 * weighted_MSE_loss(theta_pred, theta, args.rate, criterion)
             l_joint = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
             l_vertex = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
-            
             l = l_data + l_joint + l_vertex
             
             loss.append(l)
             loss_data.append(l_data)
             loss_joint.append(l_joint)
             loss_vertex.append(l_vertex)
+
             MPJPE.append(mpjpe.clone().detach())
             MPVPE.append(mpvpe.clone().detach())
 
@@ -431,6 +426,7 @@ def write_ply(save_path, vertex, rgb=None):
     vertex = PlyElement.describe(np.array(vertex, dtype=[('x', 'float32'), ('y', 'float32'), ('z', 'float32')]), 'vertex')
     
     PlyData([vertex]).write(save_path)   
+
 
 def write_mesh(save_path, vertex, face, rgb=None):
     """
@@ -454,6 +450,7 @@ def write_mesh(save_path, vertex, face, rgb=None):
     mesh.set_attribute("blue", mesh_ref.get_attribute("vertex_blue"))
     pymesh.meshio.save_mesh(save_path, mesh, "red", "green", "blue", ascii=True)
 
+
 def test(model, dataloader_test, device, args):
     # criterion = nn.MSELoss().to(device)
     smpl_model_path = os.path.join(args.basic_path, 'model_m.pkl')   
@@ -475,8 +472,9 @@ def test(model, dataloader_test, device, args):
     with torch.no_grad():
         for data in tqdm(dataloader_test, mininterval=2, desc=desc, leave=False, ncols=100):
             marker = data['marker'].to(device)
-            theta = data['theta'].to(device)
             beta = data['beta'].to(device)
+            vertex = data['vertex'].to(device)
+            joint = data['joint'].to(device)
 
             theta_pred = model(marker)
 
@@ -484,23 +482,9 @@ def test(model, dataloader_test, device, args):
             joint_pred = smpl_model.joints
             vertex_pred = smpl_model.verts
 
-            smpl_model(beta, theta)
-            joint = smpl_model.joints
-            vertex = smpl_model.verts
-
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
 
-            # l_data = criterion(theta_pred, theta)
-            # l_data = cal_data_loss(theta_pred, theta, args.rate, criterion)
-            # l_joint = criterion(joint_pred, joint)
-            # l_vertex = criterion(vertex_pred, vertex)
-            # l = args.lambda1 * l_data + args.lambda2 * l_joint +  args.lambda3 * l_vertex
-
-            # loss.append(l)
-            # loss_data.append(l_data)
-            # loss_joint.append(l_joint)
-            # loss_vertex.append(l_vertex)
             MPJPE.append(mpjpe.clone().detach())
             MPVPE.append(mpvpe.clone().detach())
 
@@ -531,7 +515,6 @@ def test(model, dataloader_test, device, args):
                     write_ply(os.path.join(args.vis_path, args.exp_name, str(batch) + '_' + str(i) + '_joint.ply'), j_pred)
 
                 batch += 1
-
 
 
     return torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean()
@@ -574,8 +557,8 @@ def main():
             f.write(str(model))
             f.writelines('----------- end ----------' + '\n')
         
-        dl_train = get_data_loader(args.data_path, args.batch_size, 'train', args.m, 20)
-        dl_val = get_data_loader(args.data_path, args.batch_size, 'val', args.m, 1)
+        dl_train = get_data_loader(args.data_path, args.bs, 'train', args.m, 4)
+        dl_val = get_data_loader(args.data_path, args.bs, 'val', args.m, 1)
 
         # create optimizer and scheduler
         optimizer = AdamW(model.parameters(), lr=args.base_lr, betas=(0.9, 0.98), eps=1e-9)

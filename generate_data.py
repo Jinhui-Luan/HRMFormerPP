@@ -459,8 +459,8 @@ def generate_data():
 
 
 if __name__ == '__main__':
-    generate_data()
+    # generate_data()
     # save2file()
-    # data = torch.load('./data/train_67.pt')  
-    # print(data['marker'].shape, data['vertex'].shape, data['joint'].shape, data['theta'].shape, data['beta'].shape)
+    data = torch.load('./data/val_67.pt')  
+    print(data['marker'].shape, data['vertex'].shape, data['joint'].shape, data['theta'].shape, data['beta'].shape)
 

@@ -8,6 +8,7 @@ Copy-paste from torch.nn.Transformer with modifications:
     * decoder returns a stack of activations from all decoding layers
 """
 from re import X
+import os
 from turtle import forward
 from typing import Optional
 import pickle
@@ -76,7 +77,36 @@ class Local_op(nn.Module):
         return x6
 
 
-class PctEmbedding(nn.Module):
+class SpatialEmbedding(nn.Module):
+    def __init__(self, d_i=3, d_h1=64, d_h2=256, d_h3=512, d_o=1024, n_sample=8):
+        super().__init__()
+        self.conv1 = nn.Conv1d(d_i, d_h1, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm1d(d_h1)
+        self.conv2 = nn.Conv1d(d_h1, d_h2, kernel_size=1, bias=False)
+        self.bn2 = nn.BatchNorm1d(d_h2)
+        self.activation = nn.ReLU(inplace=True)
+        self.gather_local_0 = Local_op(d_h3, d_h3)
+        self.gather_local_1 = Local_op(d_o, d_o)
+        self.n_sample = n_sample
+
+    def forward(self, xyz):
+        output = xyz                                                        # (B, N, d_i)    
+        output = output.permute(0, 2, 1)                                    # (B, d_i, N)
+        output = self.activation(self.bn1(self.conv1(output)))              # (B, d_h1, N)
+        output = self.activation(self.bn2(self.conv2(output)))              # (B, d_h2, N)
+        output = output.permute(0, 2, 1)                                    # (B, N, d_h2)
+
+        output = group(n_sample=self.n_sample, xyz=xyz, feature=output)     # (B, N, n_sample, 2*d_h2)
+        output = self.gather_local_0(output)                                # (B, d_h3, N)
+        output = output.permute(0, 2, 1)                                    # (B, N, d_h3)
+
+        output = group(n_sample=self.n_sample, xyz=xyz, feature=output)     # (B, N, n_sample, 2*d_h3)
+        output = self.gather_local_1(output)                                # (B, d_o, N)
+
+        return output
+    
+
+class TemporalEmbedding(nn.Module):
     def __init__(self, d_i=3, d_h1=64, d_h2=256, d_h3=512, d_o=1024, n_sample=8):
         super().__init__()
         self.conv1 = nn.Conv1d(d_i, d_h1, kernel_size=1, bias=False)
@@ -456,8 +486,33 @@ class Transformer(nn.Module):
     def __init__(self, args):
 
         super().__init__()
-        if args.pct_emb:
-            self.enc_embedding = PctEmbedding(
+
+        self.spa_emb = args.spa_emb
+        self.tem_emb = args.tem_emb
+        self.spa_n_q = args.spa_n_q
+        self.tem_n_q = args.tem_n_q
+
+        if self.spa_emb:
+            self.spatial_embedding = SpatialEmbedding(
+                d_i=args.d_i,
+                d_h1=args.d_h1,
+                d_h2=args.d_h2,
+                d_h3=args.d_h3,
+                d_o=args.d_model,
+                n_sample=args.n_sample
+            )
+        else:
+            self.spatial_embedding = GenericMLP(
+                input_dim=args.d_i,
+                hidden_dims=[args.d_model, args.d_ffn],
+                output_dim=args.d_model,
+                norm_name=args.norm_name,
+                activation=args.activation, 
+                use_conv=True
+            )
+
+        if self.tem_emb:
+            self.temporal_embedding = TemporalEmbedding(
                 d_i=args.d_i,
                 d_h1=args.d_h1,
                 d_h2=args.d_h2,
@@ -474,6 +529,7 @@ class Transformer(nn.Module):
                 activation=args.activation, 
                 use_conv=True
             )
+        
 
         # self.enc_pos_embedding = PositionEmbeddingLearned(
         #     d_i=args.d_i,
@@ -492,50 +548,18 @@ class Transformer(nn.Module):
             norm_name=args.norm_name
         )
 
-        self.encoder = TransformerEncoder(
+        self.spa_encoder = TransformerEncoder(
             enc_layer=self.enc_layer, 
             enc_n_layers=args.enc_n_layers
         )
 
-        if hasattr(self.encoder, "masking_radius"):
-            hidden_dims = [args.d_model]
-        else:
-            hidden_dims = [args.d_model, args.d_model]
-
-        self.enc2dec_prj = GenericMLP(
-            input_dim=args.d_model,
-            hidden_dims=hidden_dims,
-            output_dim=args.d_model,
-            norm_name=args.norm_name,
-            activation=args.activation,
-            use_conv=True,
-            output_use_activation=True,
-            output_use_norm=True,
-            output_use_bias=False,
+        self.tem_encoder = TransformerEncoder(
+            enc_layer=self.enc_layer, 
+            enc_n_layers=args.enc_n_layers
         )
 
-        self.query_embed = nn.Embedding(args.n_q, args.d_model)
-
-        self.query_prj = GenericMLP(
-            input_dim=args.d_model,
-            hidden_dims=[args.d_model],
-            output_dim=args.d_model,
-            norm_name=args.norm_name,
-            activation=args.activation,
-            use_conv=True,
-            output_use_activation=True,
-            hidden_use_bias=True,
-        )
-
-        # self.dec_pos_embedding = PositionEmbeddingLearned(
-        #     d_i=args.d_i,
-        #     d_h1=args.d_h1,
-        #     d_h2=args.d_h2, 
-        #     d_o=args.d_model
-        # )
-
-        self.n_q = args.n_q
-        self.pct_emb = args.pct_emb
+        self.spa_query_embed = nn.Embedding(args.spa_n_q, args.d_model)
+        self.tem_query_embed = nn.Embedding(args.tem_n_q, args.d_model)
 
         self.dec_layer = TransformerDecoderLayer(
             d_model=args.d_model,
@@ -547,12 +571,21 @@ class Transformer(nn.Module):
             norm_name=args.norm_name
         )
 
-        self.decoder = TransformerDecoder(
+        self.spa_decoder = TransformerDecoder(
             dec_layer=self.dec_layer,
             dec_n_layers=args.dec_n_layers
         )
 
+        self.tem_decoder = TransformerDecoder(
+            dec_layer=self.dec_layer,
+            dec_n_layers=args.dec_n_layers
+        )
+
+        self.spa_n_prj = nn.Linear(args.f, args.tem_n_q, bias=False)
+        self.tem_n_prj = nn.Linear(args.m, args.spa_n_q, bias=False)
+
         self.trg_prj = nn.Linear(args.d_model, args.d_o, bias=False)
+
 
         for p in self.parameters():
             if p.dim() > 1:
@@ -560,55 +593,57 @@ class Transformer(nn.Module):
 
         'To facilitate the residual connections, the dimensions of all module outputs shall be the same.'
 
-    # def get_query_embeddings(self, xyz):
-    #     query_inds = furthest_point_sample(xyz, self.n_q)
-    #     query_inds = query_inds.long()
-    #     query_xyz = [torch.gather(xyz[..., x], 1, query_inds) for x in range(3)]
-    #     query_xyz = torch.stack(query_xyz)
-    #     query_xyz = query_xyz.permute(1, 2, 0)
-
-    #     # Gater op above can be replaced by the three lines below from the pointnet2 codebase
-    #     # xyz_flipped = encoder_xyz.transpose(1, 2).contiguous()
-    #     # query_xyz = gather_operation(xyz_flipped, query_inds.int())
-    #     # query_xyz = query_xyz.transpose(1, 2)
-    #     query_pos = self.dec_pos_embedding(query_xyz)
-    #     query_embed = self.query_prj(query_pos)
-    #     return query_embed.permute(2, 0, 1), query_pos.permute(2, 0, 1)
-
 
     def forward(self, xyz, encoder_only=False):
-        src_pos = None
-        # src_pos = self.enc_pos_embedding(xyz)                                                 # (B, C, N)
-        # src_pos = src_pos.permute(2, 0, 1)
+        '''
+        xyz: the 3D coordinates of input marker with size of (bs, f, m, 3)
+        '''
+        bs, f, m, d_i = xyz.shape
 
-        if self.pct_emb:
-            pre_enc_features = self.enc_embedding(xyz)                                          # (B, C, N)
+        src_pos = None
+
+        if self.spa_emb:
+            spa_emb_features = self.spatial_embedding(xyz.reshape(bs*f, m, d_i))                                        # Input: (bs*f, m, d_i), Output: (bs*f, d_model, m)
             
         else:
-            pre_enc_features = self.enc_embedding(xyz.permute(0, 2, 1))                        # (B, N, C)
+            spa_emb_features = self.enc_embedding(xyz.reshape(bs*f, m, d_i).permute(0, 2, 1))                           # Input: (bs*f, d_i, m), Output: (bs*f, d_model, m)
+
+        if self.tem_emb:
+            tem_emb_features = self.temporal_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i))                   # Input: (bs*m, f, d_i), Output: (bs*m, d_model, f)
+            
+        else:
+            tem_emb_features = self.enc_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i).permute(0, 2, 1))       # Input: (bs*m, d_i, f), Output: (bs*m, d_model, f)
 
         # nn.MultiHeadAttention in encoder expects features of size (N, B, C)
-        pre_enc_features = pre_enc_features.permute(2, 0, 1)
+        spa_emb_features = spa_emb_features.permute(2, 0, 1)                                    # (m, bs*f, d_model)
+        tem_emb_features = tem_emb_features.permute(2, 0, 1)                                    # (f, bs*m, d_model)
 
-        enc_features = self.encoder(pre_enc_features, src_pos=src_pos)[0]                       # (N, B, C)
-        # enc_features = enc_features.permute(1, 2, 0)                                          # (B, C, N)     
-        # enc_features = self.enc2dec_prj(enc_features)                                         # (B, C, N)
-        # enc_features = enc_features.permute(2, 0, 1)                                          # (N, B, C) 
+        spa_enc_features = self.spa_encoder(spa_emb_features, src_pos=src_pos)[0]               # (m, bs*f, d_model)
+        tem_enc_features = self.tem_encoder(tem_emb_features, src_pos=src_pos)[0]               # (f, bs*m, d_model)
 
         if encoder_only:
-            return enc_features.permute(1, 0, 2)                                                # (B, N, C)
+            enc_features = spa_enc_features.reshape(m, bs, f, -1).permute(1, 2, 0, 3) + tem_enc_features.reshape(f, bs, m, -1).permute(1, 0, 2, 3)  # (bs, f, m, d_model)
+            return self.trg_prj(enc_features)                                                   # (bs, f, m, d_o)
 
-        # trg, trg_pos = self.get_query_embeddings(xyz)
-
-        trg_pos = self.query_embed.weight                                                       # (n_q, C)
-        trg_pos = trg_pos.unsqueeze(1).repeat(1, xyz.shape[0], 1)                               # (n_q, B, C)                                
-        trg = torch.zeros_like(trg_pos)
+        # initialize pose query
+        spa_trg_pos = self.spa_query_embed.weight                                               # (spa_n_q, d_model)
+        spa_trg_pos = spa_trg_pos.unsqueeze(1).repeat(1, bs*f, 1)                               # (spa_n_q, bs*f, d_model)                                
+        spa_trg = torch.zeros_like(spa_trg_pos)                                                 # (spa_n_q, bs*f, d_model)  
+        tem_trg_pos = self.tem_query_embed.weight                                               # (tem_n_q, d_model)
+        tem_trg_pos = tem_trg_pos.unsqueeze(1).repeat(1, bs*m, 1)                               # (tem_n_q, bs*m, d_model)                                
+        tem_trg = torch.zeros_like(tem_trg_pos)                                                 # (tem_n_q, bs*m, d_model)    
 
         # nn.MultiHeadAttention in decoder expects features of size (N, B, C)
-        dec_features = self.decoder(trg, enc_features, src_pos=src_pos, trg_pos=trg_pos)[0]     # (n_q, B, C)
+        spa_dec_features = self.spa_decoder(spa_trg, spa_enc_features, src_pos=src_pos, trg_pos=spa_trg_pos)[0]         # (spa_n_q, bs*f, d_model)
+        tem_dec_features = self.tem_decoder(tem_trg, tem_enc_features, src_pos=src_pos, trg_pos=tem_trg_pos)[0]         # (tem_n_q, bs*m, d_model)
 
-        output = self.trg_prj(dec_features.permute(1, 0, 2))                                    # (B, n_q, C)
+        spa_dec_features = self.spa_n_prj(spa_dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 0, 3, 2))        # (bs, spa_n_q, d_model, tem_n_q)
+        tem_dec_features = self.tem_n_prj(tem_dec_features.reshape(self.tem_n_q, bs, m, -1).permute(1, 0, 3, 2))        # (bs, tem_n_q, d_model, spa_n_q)
 
+        dec_features = spa_dec_features.permute(0, 3, 1, 2) + tem_dec_features.permute(0, 1, 3, 2)                      # (bs, tem_n_q, spa_n_q, d_model)   
+
+        output = self.trg_prj(dec_features)                                                                             # (bs, tem_n_q, spa_n_q, d_o)
+        
         return output
 
     
