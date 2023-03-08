@@ -447,12 +447,14 @@ def generate_data():
         # print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
 
         dataset['label'] = label
-        dataset['marker'] = torch.from_numpy(marker).to(torch.float32)          # (n_seq, f, m, 3)
-        dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)          # (n_seq, f, v, 3)
-        dataset['joint'] = torch.from_numpy(joint).to(torch.float32)            # (n_seq, f, j, 3)
-        dataset['theta'] = torch.from_numpy(theta).to(torch.float32)            # (n_seq, f, j, 3)
-        dataset['beta'] = torch.from_numpy(beta).to(torch.float32)              # (n_seq, f, 10)
+        dataset['marker'] = torch.from_numpy(marker).to(torch.float32)                                          # (n_seq, f, m, 3)
+        dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)                                          # (n_seq, f, v, 3)
+        dataset['joint'] = torch.from_numpy(joint).to(torch.float32)                                            # (n_seq, f, j, 3)
+        dataset['theta'] = torch.from_numpy(theta).to(torch.float32)                                            # (n_seq, f, j, 3)
+        dataset['beta'] = torch.from_numpy(beta).to(torch.float32)                                              # (n_seq, f, 10)
         dataset['gender'] = torch.from_numpy(gender).to(torch.int32)
+        dataset['theta_max'] = dataset['theta'].max(dim=0)[0].max(dim=0)[0].to(torch.float32)                   # (j, 3)
+        dataset['theta_min'] = dataset['theta'].min(dim=0)[0].min(dim=0)[0].to(torch.float32)                   # (j, 3)
 
         torch.save(dataset, os.path.join(args.data_path, mode + '_' + str(m) + '.pt'), pickle_protocol=4)
         print('Successfully save {} data, and the total number of sequences is {}!'.format(mode, marker.shape[0]))

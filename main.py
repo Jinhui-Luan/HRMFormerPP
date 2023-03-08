@@ -162,15 +162,15 @@ def attach_placeholder(X):
     return torch.cat((placeholder, X), dim=1)
 
 
-def get_data_loader(data_path, batch_size, mode, m, interval):
+def get_data_loader(data_path, batch_size, mode, m, stride):
     data = torch.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'))
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
 
-    marker = torch.Tensor(data['marker'])[::interval].to(torch.float32)         # (n_seq, f, m, 3)
-    theta = torch.Tensor(data['theta'])[::interval].to(torch.float32)           # (n_seq, f, j, 3)
-    beta = torch.Tensor(data['beta'])[::interval].to(torch.float32)             # (n_seq, f, 10)
-    vertex = torch.Tensor(data['vertex'])[::interval].to(torch.float32)         # (n_seq, f, v, 3)
-    joint = torch.Tensor(data['joint'])[::interval].to(torch.float32)           # (n_seq, f, j, 3)
+    marker = torch.Tensor(data['marker'])[::stride].to(torch.float32)           # (n_seq, f, m, 3)
+    theta = torch.Tensor(data['theta'])[::stride].to(torch.float32)             # (n_seq, f, j, 3)
+    beta = torch.Tensor(data['beta'])[::stride].to(torch.float32)               # (n_seq, f, 10)
+    vertex = torch.Tensor(data['vertex'])[::stride].to(torch.float32)           # (n_seq, f, v, 3)
+    joint = torch.Tensor(data['joint'])[::stride].to(torch.float32)             # (n_seq, f, j, 3)
 
     for i in range(marker.shape[0]):
         marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
@@ -389,8 +389,8 @@ def val_epoch(model, smpl_model, dataloader_val, criterion, device, args):
             marker = data['marker'].to(device)
             theta = data['theta'].to(device)
             beta = data['beta'].to(device)
-            vertex = data['vertex'].to(device)
-            joint = data['joint'].to(device)
+            # vertex = data['vertex'].to(device)
+            # joint = data['joint'].to(device)
 
             bs, f, _, _ = marker.shape
 
@@ -399,6 +399,10 @@ def val_epoch(model, smpl_model, dataloader_val, criterion, device, args):
             smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
             joint_pred = smpl_model.joints.reshape(bs, f, 24, 3)
             vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3)
+
+            smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
+            joint= smpl_model.joints.reshape(bs, f, 24, 3)      
+            vertex = smpl_model.verts.reshape(bs, f, 6890, 3)
 
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
@@ -593,7 +597,8 @@ def main():
 if __name__ == '__main__':
     ''' 
     Usage:
-    CUDA_VISIBLE_DEVICES='0' python main.py -mode 'train' -warmup 24000 -exp_name '1_d1024' -d_model 1024
+    CUDA_VISIBLE_DEVICES='0' python main.py -exp_name='1_net1_rp_211' -pre_norm -spa_emb -tem_emb
     '''
+
     main()
-    
+
