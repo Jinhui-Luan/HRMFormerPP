@@ -1,12 +1,11 @@
-import numpy as np
 import os
 import time
 import random
-from tqdm import tqdm
 import IPython
-from math import cos, pi
-from plyfile import PlyData, PlyElement
 import pymesh
+import numpy as np
+from tqdm import tqdm
+from math import cos, pi
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,8 +14,11 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam, AdamW
-from transformer import Transformer, SMPLModel_torch
+
+import transformer
+from transformer import SMPLModel_torch
 from option import BaseOptionParser
+from plyfile import PlyData, PlyElement
 
 
 class MyDataset(Dataset):
@@ -328,8 +330,8 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion, devic
         marker = data['marker'].to(device)                          # (bs, f, m, 3)
         theta = data['theta'].to(device)                            # (bs, f, spa_n_q, 3)
         beta = data['beta'].to(device)                              # (bs, f, 10)
-        vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
-        joint = data['joint'].to(device)                            # (bs, f, 24, 3)
+        # vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
+        # joint = data['joint'].to(device)                            # (bs, f, 24, 3)
 
         bs, f, _, _ = marker.shape
         scheduler.optimizer.zero_grad()
@@ -339,6 +341,10 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion, devic
         joint_pred = smpl_model.joints.reshape(bs, f, 24, 3)      
         vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3)
 
+        smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
+        joint= smpl_model.joints.reshape(bs, f, 24, 3)      
+        vertex = smpl_model.verts.reshape(bs, f, 6890, 3)
+
         mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
         mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
 
@@ -347,6 +353,8 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion, devic
         l_joint = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
         l_vertex = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l = l_data + l_joint + l_vertex
+
+        # IPython.embed()
 
         l.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
@@ -532,7 +540,7 @@ def main():
     args.d_h1 = args.d_h2 // 4
     args.d_ffn = args.d_model * 2
 
-    model = Transformer(args).to(device)
+    model = transformer.Transformer1(args).to(device)
 
     args.exp_path = os.path.join(args.output_path, args.exp_name)
     args.log_save_path = os.path.join(args.exp_path, 'logs')
@@ -557,7 +565,7 @@ def main():
             f.write(str(model))
             f.writelines('----------- end ----------' + '\n')
         
-        dl_train = get_data_loader(args.data_path, args.bs, 'train', args.m, 4)
+        dl_train = get_data_loader(args.data_path, args.bs, 'train', args.m, args.stride)
         dl_val = get_data_loader(args.data_path, args.bs, 'val', args.m, 1)
 
         # create optimizer and scheduler

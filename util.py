@@ -173,17 +173,40 @@ def knn_point(nsample, xyz, new_xyz):
 #     return new_xyz, new_points                                              # (B, npoint, D), (B, npoint, nsample, 2D)
 
 
-def group(n_sample, xyz, feature):
+def spa_group(k, xyz, feature):
     """
     Input:
-        nsample: the number of neighbors in knn
+        k: the number of neighbors in knn
+        xyz: 3D coordinates of input point cloud with size of (B, N, 3)
         feature: input feature with size of (B, N, C)
     Return:
-        new_feature: (B, N, n_sample, 2C)
+        new_feature: (B, N, k, 2C)
     """
-    idx = knn_point(n_sample, xyz, xyz)                                          # idx: (B, N, n_sample)
-    grouped_feature = index_points(feature, idx)                                # grouped_feature: (B, N, n_sample, C)
+    idx = knn_point(k, xyz, xyz)                                                    # idx: (B, N, k)
+    grouped_feature = index_points(feature, idx)                                    # grouped_feature: (B, N, k, C)
     grouped_feature_norm = grouped_feature - feature.unsqueeze(2)
-    new_feature = torch.cat([grouped_feature_norm, feature.unsqueeze(2).repeat(1, 1, n_sample, 1)], dim=-1)
+    new_feature = torch.cat([grouped_feature_norm, feature.unsqueeze(2).repeat(1, 1, k, 1)], dim=-1)
     
-    return new_feature                                                          # new_feature: (B, N, n_sample, 2C)
+    return new_feature                                                              # new_feature: (B, N, k, 2C)
+
+
+def tem_group(l, feature):
+    """
+    Input:
+        l: the number of neighbor frames in one side
+        feature: input feature with size of (B, f, C)
+    Return:
+        new_feature: (B, f, l, 2*C)
+    """
+    pad_feature = F.pad(feature, (0, 0, l, l), 'constant', 0)                                       # (B, f+2*l, C)
+    repeat_feature = feature.unsqueeze(2).repeat(1, 1, 2*l, 1)                                      # (B, f, 2*l, C)
+    grouped_feature = torch.zeros_like(repeat_feature)                                              # (B, f, 2*l, C)
+    # print(group_feature)
+    for i in range(feature.shape[1]):
+        f = torch.cat([pad_feature[:, i:i+l, :], pad_feature[:, i+l+1:i+2*l+1, :]], dim=1)          # (B, 2*l, C)
+        # print(f)
+        grouped_feature[:, i, :, :] = f              
+        # print(group_feature)
+    new_feature = torch.cat([grouped_feature-repeat_feature, repeat_feature], dim=-1)               # (B, f, 2*l, 2*C)     
+
+    return new_feature

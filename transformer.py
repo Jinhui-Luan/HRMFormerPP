@@ -18,10 +18,178 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 # from pointnet2_ops.pointnet2_utils import furthest_point_sample
-from util import group
+from util import spa_group, tem_group
 from position_embedding import PositionEmbeddingCoordsSine
 from helpers import GenericMLP, ACTIVATION_DICT, NORM_DICT, WEIGHT_INIT_DICT, get_clones
 import IPython
+
+
+class SMPLModel_torch(nn.Module):
+    def __init__(self, model_path, device=None):
+        super(SMPLModel_torch, self).__init__()
+        with open(model_path, 'rb') as f:
+            params = pickle.load(f)
+        self.J_regressor = torch.from_numpy(np.array(params['J_regressor'].todense())).type(torch.float64)
+        if 'joint_regressor' in params.keys():
+            self.joint_regressor = torch.from_numpy(np.array(params['joint_regressor'].T.todense())).type(torch.float64)
+        else:
+            self.joint_regressor = torch.from_numpy(np.array(params['J_regressor'].todense())).type(torch.float64)
+        self.weights = torch.from_numpy(params['weights']).type(torch.float64)
+        self.posedirs = torch.from_numpy(params['posedirs']).type(torch.float64)
+        self.v_template = torch.from_numpy(params['v_template']).type(torch.float64)
+        self.shapedirs = torch.from_numpy(params['shapedirs']).type(torch.float64)
+        self.kintree_table = params['kintree_table']
+        self.faces = params['f']
+        self.device = device if device is not None else torch.device('cpu')
+        self.verts = None
+        self.joints = None
+        for name in ['J_regressor', 'joint_regressor', 'weights', 'posedirs', 'v_template', 'shapedirs']:
+            _tensor = getattr(self, name)
+            # print(' Tensor {} shape: '.format(name), _tensor.shape)
+            setattr(self, name, _tensor.to(device))
+
+    @staticmethod
+    def rodrigues(r):
+        """
+        Rodrigues' rotation formula that turns axis-angle tensor into rotation
+        matrix in a batch-ed manner.
+        Parameter:
+        ----------
+        r: Axis-angle rotation tensor of shape [batch_size * angle_num, 1, 3].
+        Return:
+        -------
+        Rotation matrix of shape [batch_size * angle_num, 3, 3].
+        """
+        eps = r.clone().normal_(std=1e-8)
+        theta = torch.norm(r + eps, dim=(1, 2), keepdim=True)  # dim cannot be tuple
+        theta_dim = theta.shape[0]
+        r_hat = r / theta
+        cos = torch.cos(theta)
+        z_stick = torch.zeros(theta_dim, dtype=torch.float64).to(r.device)
+        m = torch.stack((z_stick, -r_hat[:, 0, 2], r_hat[:, 0, 1], r_hat[:, 0, 2], z_stick,
+            -r_hat[:, 0, 0], -r_hat[:, 0, 1], r_hat[:, 0, 0], z_stick), dim=1)
+        m = torch.reshape(m, (-1, 3, 3))
+        i_cube = (torch.eye(3, dtype=torch.float64).unsqueeze(dim=0) \
+             + torch.zeros((theta_dim, 3, 3), dtype=torch.float64)).to(r.device)
+        A = r_hat.permute(0, 2, 1)
+        dot = torch.matmul(A, r_hat)
+        R = cos * i_cube + (1 - cos) * dot + torch.sin(theta) * m
+        return R
+
+    @staticmethod
+    def with_zeros(x):
+        """
+        Append a [0, 0, 0, 1] tensor to a [3, 4] tensor.
+        Parameter:
+        ---------
+        x: Tensor to be appended.
+        Return:
+        ------
+        Tensor after appending of shape [4,4]
+        """
+        ones = torch.tensor(
+            [[[0.0, 0.0, 0.0, 1.0]]], dtype=torch.float64
+        ).expand(x.shape[0],-1,-1).to(x.device)
+        ret = torch.cat((x, ones), dim=1)
+        return ret
+
+    @staticmethod
+    def pack(x):
+        """
+        Append zero tensors of shape [4, 3] to a batch of [4, 1] shape tensor.
+        Parameter:
+        ----------
+        x: A tensor of shape [batch_size, 4, 1]
+        Return:
+        ------
+        A tensor of shape [batch_size, 4, 4] after appending.
+        """
+        zeros43 = torch.zeros(
+        (x.shape[0], x.shape[1], 4, 3), dtype=torch.float64).to(x.device)
+        ret = torch.cat((zeros43, x), dim=3)
+        return ret
+
+    def write_obj(self, verts, file_name):
+        with open(file_name, 'w') as fp:
+            for v in verts:
+                fp.write('v %f %f %f\n' % (v[0], v[1], v[2]))
+
+            for f in self.faces + 1:
+                fp.write('f %d %d %d\n' % (f[0], f[1], f[2]))
+
+    def forward(self, betas, pose, trans=None, simplify=False):
+        """
+        Construct a compute graph that takes in parameters and outputs a tensor as
+        model vertices. Face indices are also returned as a numpy ndarray.
+        
+        20190128: Add batch support.
+        Parameters:
+        ---------
+        pose: Also known as 'theta', an [N, 24, 3] tensor indicating child joint rotation
+        relative to parent joint. For root joint it's global orientation.
+        Represented in a axis-angle format.
+        betas: Parameter for model shape. A tensor of shape [N, 10] as coefficients of
+        PCA components. Only 10 components were released by SMPL author.
+        trans: Global translation tensor of shape [N, 3].
+        Return:
+        ------
+        A 3-D tensor of [N * 6890 * 3] for vertices
+        """
+        batch_num = betas.shape[0]
+        id_to_col = {self.kintree_table[1, i]: i for i in range(self.kintree_table.shape[1])}
+        parent = {i: id_to_col[self.kintree_table[0, i]] for i in range(1, self.kintree_table.shape[1])}
+        v_shaped = torch.tensordot(betas.to(torch.float64), self.shapedirs, dims=([1], [2])) + self.v_template
+        J = torch.matmul(self.J_regressor, v_shaped)
+        R_cube_big = self.rodrigues(pose.reshape(-1, 1, 3)).reshape(batch_num, -1, 3, 3)
+
+        if simplify:
+            v_posed = v_shaped
+        else:
+            R_cube = R_cube_big[:, 1:, :, :]
+            I_cube = (torch.eye(3, dtype=torch.float64).unsqueeze(dim=0) + \
+                torch.zeros((batch_num, R_cube.shape[1], 3, 3), dtype=torch.float64)).to(self.device)
+            lrotmin = (R_cube - I_cube).reshape(batch_num, -1, 1).squeeze(dim=2)
+            v_posed = v_shaped + torch.tensordot(lrotmin, self.posedirs, dims=([1], [2]))
+
+        g = []
+        g.append(self.with_zeros(torch.cat((R_cube_big[:, 0], torch.reshape(J[:, 0, :], (-1, 3, 1))), dim=2)))
+        for i in range(1, self.kintree_table.shape[1]):
+            g.append(
+                torch.matmul(
+                    g[parent[i]],
+                    self.with_zeros(
+                        torch.cat((R_cube_big[:, i], torch.reshape(J[:, i, :] - J[:, parent[i], :], (-1, 3, 1))), dim=2)
+                    )
+                )
+            )
+        
+
+        g = torch.stack(g, dim=1)
+
+        G = g - \
+            self.pack(
+                torch.matmul(
+                    g,
+                    torch.reshape(
+                        torch.cat((J, torch.zeros((batch_num, 24, 1), dtype=torch.float64).to(self.device)), dim=2),
+                        (batch_num, 24, 4, 1)
+                    )     
+                )
+            )
+        # Restart from here
+        T = torch.tensordot(G, self.weights, dims=([1], [1])).permute(0, 3, 1, 2)
+        rest_shape_h = torch.cat(
+            (v_posed, torch.ones((batch_num, v_posed.shape[1], 1), dtype=torch.float64).to(self.device)), dim=2
+        )
+        v = torch.matmul(T, torch.reshape(rest_shape_h, (batch_num, -1, 4, 1)))
+        v = torch.reshape(v, (batch_num, -1, 4))[:, :, :3]
+
+        if trans == None:
+            self.verts = v
+            self.joints = g[:, :, :3, 3]
+        else:
+            self.verts = v + torch.reshape(trans, (batch_num, 1, 3))
+            self.joints = g[:, :, :3, 3] + torch.reshape(trans, (batch_num, 1, 3))
 
 
 # class PositionEmbeddingLearned(nn.Module):
@@ -61,24 +229,22 @@ class Local_op(nn.Module):
 
     def forward(self, x):
         '''
-        x: (B, N, n_sample, d_i)
+        x: (B, N, K, d_i)
         return: (B, d_o, N)
         '''
-        B, N, S, D = x.size()                                           
-        x1 = x.permute(0, 1, 3, 2)                                          # x1: (B, N, d_i, n_sample)
-        x2 = x1.reshape(-1, D, S)                                           # x2: (B*N, d_i, n_sample)
-        BN, _, _ = x2.size()
-        x3 = self.activation(self.bn1(self.conv1(x2)))                      # x3: (B*N, d_o, n_sample)
-        x4 = self.activation(self.bn2(self.conv2(x3)))                      # x4: (B*N, d_o, n_sample)
-        
-        x5 = F.adaptive_max_pool1d(x4, 1).view(BN, -1)                      # x5: (B*N, d_o)
+        B, N, K, C = x.shape                                          
+        x1 = x.permute(0, 1, 3, 2)                                          # x1: (B, N, d_i, K)
+        x2 = x1.reshape(-1, C, K)                                           # x2: (B*N, d_i, K)
+        x3 = self.activation(self.bn1(self.conv1(x2)))                      # x3: (B*N, d_o, K)
+        x4 = self.activation(self.bn2(self.conv2(x3)))                      # x4: (B*N, d_o, K)
+        x5 = F.adaptive_max_pool1d(x4, 1).reshape(B*N, -1)                  # x5: (B*N, d_o)
         x6 = x5.reshape(B, N, -1).permute(0, 2, 1)                          # x6: (B, d_o, N)
 
         return x6
 
 
 class SpatialEmbedding(nn.Module):
-    def __init__(self, d_i=3, d_h1=64, d_h2=256, d_h3=512, d_o=1024, n_sample=8):
+    def __init__(self, d_i=3, d_h1=64, d_h2=256, d_h3=512, d_o=1024, k=8):
         super().__init__()
         self.conv1 = nn.Conv1d(d_i, d_h1, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm1d(d_h1)
@@ -87,27 +253,27 @@ class SpatialEmbedding(nn.Module):
         self.activation = nn.ReLU(inplace=True)
         self.gather_local_0 = Local_op(d_h3, d_h3)
         self.gather_local_1 = Local_op(d_o, d_o)
-        self.n_sample = n_sample
+        self.k = k
 
-    def forward(self, xyz):
-        output = xyz                                                        # (B, N, d_i)    
-        output = output.permute(0, 2, 1)                                    # (B, d_i, N)
-        output = self.activation(self.bn1(self.conv1(output)))              # (B, d_h1, N)
-        output = self.activation(self.bn2(self.conv2(output)))              # (B, d_h2, N)
-        output = output.permute(0, 2, 1)                                    # (B, N, d_h2)
+    def forward(self, xyz): 
+        output = xyz                                                            # (B, N, d_i)    
+        output = output.permute(0, 2, 1)                                        # (B, d_i, N)
+        output = self.activation(self.bn1(self.conv1(output)))                  # (B, d_h1, N)
+        output = self.activation(self.bn2(self.conv2(output)))                  # (B, d_h2, N)
+        output = output.permute(0, 2, 1)                                        # (B, N, d_h2)
 
-        output = group(n_sample=self.n_sample, xyz=xyz, feature=output)     # (B, N, n_sample, 2*d_h2)
-        output = self.gather_local_0(output)                                # (B, d_h3, N)
-        output = output.permute(0, 2, 1)                                    # (B, N, d_h3)
+        output = spa_group(k=self.k, xyz=xyz, feature=output)                   # (B, N, k, 2*d_h2)
+        output = self.gather_local_0(output)                                    # (B, d_h3, N)
+        output = output.permute(0, 2, 1)                                        # (B, N, d_h3)
 
-        output = group(n_sample=self.n_sample, xyz=xyz, feature=output)     # (B, N, n_sample, 2*d_h3)
-        output = self.gather_local_1(output)                                # (B, d_o, N)
+        output = spa_group(k=self.k, xyz=xyz, feature=output)                   # (B, N, k, 2*d_h3)
+        output = self.gather_local_1(output)                                    # (B, d_o, N)
 
         return output
     
 
 class TemporalEmbedding(nn.Module):
-    def __init__(self, d_i=3, d_h1=64, d_h2=256, d_h3=512, d_o=1024, n_sample=8):
+    def __init__(self, d_i=3, d_h1=64, d_h2=256, d_h3=512, d_o=1024, l=1):
         super().__init__()
         self.conv1 = nn.Conv1d(d_i, d_h1, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm1d(d_h1)
@@ -116,21 +282,21 @@ class TemporalEmbedding(nn.Module):
         self.activation = nn.ReLU(inplace=True)
         self.gather_local_0 = Local_op(d_h3, d_h3)
         self.gather_local_1 = Local_op(d_o, d_o)
-        self.n_sample = n_sample
+        self.l = l
 
     def forward(self, xyz):
-        output = xyz                                                        # (B, N, d_i)    
-        output = output.permute(0, 2, 1)                                    # (B, d_i, N)
-        output = self.activation(self.bn1(self.conv1(output)))              # (B, d_h1, N)
-        output = self.activation(self.bn2(self.conv2(output)))              # (B, d_h2, N)
-        output = output.permute(0, 2, 1)                                    # (B, N, d_h2)
+        output = xyz                                                            # (B, N, d_i)    
+        output = output.permute(0, 2, 1)                                        # (B, d_i, N)
+        output = self.activation(self.bn1(self.conv1(output)))                  # (B, d_h1, N)
+        output = self.activation(self.bn2(self.conv2(output)))                  # (B, d_h2, N)
+        output = output.permute(0, 2, 1)                                        # (B, N, d_h2)
 
-        output = group(n_sample=self.n_sample, xyz=xyz, feature=output)     # (B, N, n_sample, 2*d_h2)
-        output = self.gather_local_0(output)                                # (B, d_h3, N)
-        output = output.permute(0, 2, 1)                                    # (B, N, d_h3)
+        output = tem_group(l=self.l, feature=output)                            # (B, N, 2*l, 2*d_h2)
+        output = self.gather_local_0(output)                                    # (B, d_h3, N)
+        output = output.permute(0, 2, 1)                                        # (B, N, d_h3)
 
-        output = group(n_sample=self.n_sample, xyz=xyz, feature=output)     # (B, N, n_sample, 2*d_h3)
-        output = self.gather_local_1(output)                                # (B, d_o, N)
+        output = tem_group(l=self.l, feature=output)                            # (B, N, l, 2*d_h3)
+        output = self.gather_local_1(output)                                    # (B, d_o, N)
 
         return output
 
@@ -480,7 +646,7 @@ class TransformerDecoder(nn.Module):
                 return output, None, None
 
 
-class Transformer(nn.Module):
+class Transformer1(nn.Module):
     ''' A sequence to sequence model with attention mechanism. '''
 
     def __init__(self, args):
@@ -499,7 +665,7 @@ class Transformer(nn.Module):
                 d_h2=args.d_h2,
                 d_h3=args.d_h3,
                 d_o=args.d_model,
-                n_sample=args.n_sample
+                k=args.k
             )
         else:
             self.spatial_embedding = GenericMLP(
@@ -518,7 +684,7 @@ class Transformer(nn.Module):
                 d_h2=args.d_h2,
                 d_h3=args.d_h3,
                 d_o=args.d_model,
-                n_sample=args.n_sample
+                l=args.l
             )
         else:
             self.enc_embedding = GenericMLP(
@@ -603,16 +769,18 @@ class Transformer(nn.Module):
         src_pos = None
 
         if self.spa_emb:
-            spa_emb_features = self.spatial_embedding(xyz.reshape(bs*f, m, d_i))                                        # Input: (bs*f, m, d_i), Output: (bs*f, d_model, m)
-            
+            spa_emb_features = self.spatial_embedding(xyz.reshape(bs*f, m, d_i))
+            # Input: (bs*f, m, d_i), Output: (bs*f, d_model, m)                                        
         else:
-            spa_emb_features = self.enc_embedding(xyz.reshape(bs*f, m, d_i).permute(0, 2, 1))                           # Input: (bs*f, d_i, m), Output: (bs*f, d_model, m)
+            spa_emb_features = self.enc_embedding(xyz.reshape(bs*f, m, d_i).permute(0, 2, 1))
+            # Input: (bs*f, d_i, m), Output: (bs*f, d_model, m)                           
 
         if self.tem_emb:
-            tem_emb_features = self.temporal_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i))                   # Input: (bs*m, f, d_i), Output: (bs*m, d_model, f)
-            
+            tem_emb_features = self.temporal_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i))
+            # Input: (bs*m, f, d_i), Output: (bs*m, d_model, f)                   
         else:
-            tem_emb_features = self.enc_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i).permute(0, 2, 1))       # Input: (bs*m, d_i, f), Output: (bs*m, d_model, f)
+            tem_emb_features = self.enc_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i).permute(0, 2, 1))
+            # Input: (bs*m, d_i, f), Output: (bs*m, d_model, f)       
 
         # nn.MultiHeadAttention in encoder expects features of size (N, B, C)
         spa_emb_features = spa_emb_features.permute(2, 0, 1)                                    # (m, bs*f, d_model)
@@ -647,169 +815,3 @@ class Transformer(nn.Module):
         return output
 
     
-class SMPLModel_torch(nn.Module):
-    def __init__(self, model_path, device=None):
-        super(SMPLModel_torch, self).__init__()
-        with open(model_path, 'rb') as f:
-            params = pickle.load(f)
-        self.J_regressor = torch.from_numpy(np.array(params['J_regressor'].todense())).type(torch.float64)
-        if 'joint_regressor' in params.keys():
-            self.joint_regressor = torch.from_numpy(np.array(params['joint_regressor'].T.todense())).type(torch.float64)
-        else:
-            self.joint_regressor = torch.from_numpy(np.array(params['J_regressor'].todense())).type(torch.float64)
-        self.weights = torch.from_numpy(params['weights']).type(torch.float64)
-        self.posedirs = torch.from_numpy(params['posedirs']).type(torch.float64)
-        self.v_template = torch.from_numpy(params['v_template']).type(torch.float64)
-        self.shapedirs = torch.from_numpy(params['shapedirs']).type(torch.float64)
-        self.kintree_table = params['kintree_table']
-        self.faces = params['f']
-        self.device = device if device is not None else torch.device('cpu')
-        self.verts = None
-        self.joints = None
-        for name in ['J_regressor', 'joint_regressor', 'weights', 'posedirs', 'v_template', 'shapedirs']:
-            _tensor = getattr(self, name)
-            # print(' Tensor {} shape: '.format(name), _tensor.shape)
-            setattr(self, name, _tensor.to(device))
-
-    @staticmethod
-    def rodrigues(r):
-        """
-        Rodrigues' rotation formula that turns axis-angle tensor into rotation
-        matrix in a batch-ed manner.
-        Parameter:
-        ----------
-        r: Axis-angle rotation tensor of shape [batch_size * angle_num, 1, 3].
-        Return:
-        -------
-        Rotation matrix of shape [batch_size * angle_num, 3, 3].
-        """
-        eps = r.clone().normal_(std=1e-8)
-        theta = torch.norm(r + eps, dim=(1, 2), keepdim=True)  # dim cannot be tuple
-        theta_dim = theta.shape[0]
-        r_hat = r / theta
-        cos = torch.cos(theta)
-        z_stick = torch.zeros(theta_dim, dtype=torch.float64).to(r.device)
-        m = torch.stack((z_stick, -r_hat[:, 0, 2], r_hat[:, 0, 1], r_hat[:, 0, 2], z_stick,
-            -r_hat[:, 0, 0], -r_hat[:, 0, 1], r_hat[:, 0, 0], z_stick), dim=1)
-        m = torch.reshape(m, (-1, 3, 3))
-        i_cube = (torch.eye(3, dtype=torch.float64).unsqueeze(dim=0) \
-             + torch.zeros((theta_dim, 3, 3), dtype=torch.float64)).to(r.device)
-        A = r_hat.permute(0, 2, 1)
-        dot = torch.matmul(A, r_hat)
-        R = cos * i_cube + (1 - cos) * dot + torch.sin(theta) * m
-        return R
-
-    @staticmethod
-    def with_zeros(x):
-        """
-        Append a [0, 0, 0, 1] tensor to a [3, 4] tensor.
-        Parameter:
-        ---------
-        x: Tensor to be appended.
-        Return:
-        ------
-        Tensor after appending of shape [4,4]
-        """
-        ones = torch.tensor(
-            [[[0.0, 0.0, 0.0, 1.0]]], dtype=torch.float64
-        ).expand(x.shape[0],-1,-1).to(x.device)
-        ret = torch.cat((x, ones), dim=1)
-        return ret
-
-    @staticmethod
-    def pack(x):
-        """
-        Append zero tensors of shape [4, 3] to a batch of [4, 1] shape tensor.
-        Parameter:
-        ----------
-        x: A tensor of shape [batch_size, 4, 1]
-        Return:
-        ------
-        A tensor of shape [batch_size, 4, 4] after appending.
-        """
-        zeros43 = torch.zeros(
-        (x.shape[0], x.shape[1], 4, 3), dtype=torch.float64).to(x.device)
-        ret = torch.cat((zeros43, x), dim=3)
-        return ret
-
-    def write_obj(self, verts, file_name):
-        with open(file_name, 'w') as fp:
-            for v in verts:
-                fp.write('v %f %f %f\n' % (v[0], v[1], v[2]))
-
-            for f in self.faces + 1:
-                fp.write('f %d %d %d\n' % (f[0], f[1], f[2]))
-
-    def forward(self, betas, pose, trans=None, simplify=False):
-        """
-        Construct a compute graph that takes in parameters and outputs a tensor as
-        model vertices. Face indices are also returned as a numpy ndarray.
-        
-        20190128: Add batch support.
-        Parameters:
-        ---------
-        pose: Also known as 'theta', an [N, 24, 3] tensor indicating child joint rotation
-        relative to parent joint. For root joint it's global orientation.
-        Represented in a axis-angle format.
-        betas: Parameter for model shape. A tensor of shape [N, 10] as coefficients of
-        PCA components. Only 10 components were released by SMPL author.
-        trans: Global translation tensor of shape [N, 3].
-        Return:
-        ------
-        A 3-D tensor of [N * 6890 * 3] for vertices
-        """
-        batch_num = betas.shape[0]
-        id_to_col = {self.kintree_table[1, i]: i for i in range(self.kintree_table.shape[1])}
-        parent = {i: id_to_col[self.kintree_table[0, i]] for i in range(1, self.kintree_table.shape[1])}
-        v_shaped = torch.tensordot(betas.to(torch.float64), self.shapedirs, dims=([1], [2])) + self.v_template
-        J = torch.matmul(self.J_regressor, v_shaped)
-        R_cube_big = self.rodrigues(pose.reshape(-1, 1, 3)).reshape(batch_num, -1, 3, 3)
-
-        if simplify:
-            v_posed = v_shaped
-        else:
-            R_cube = R_cube_big[:, 1:, :, :]
-            I_cube = (torch.eye(3, dtype=torch.float64).unsqueeze(dim=0) + \
-                torch.zeros((batch_num, R_cube.shape[1], 3, 3), dtype=torch.float64)).to(self.device)
-            lrotmin = (R_cube - I_cube).reshape(batch_num, -1, 1).squeeze(dim=2)
-            v_posed = v_shaped + torch.tensordot(lrotmin, self.posedirs, dims=([1], [2]))
-
-        g = []
-        g.append(self.with_zeros(torch.cat((R_cube_big[:, 0], torch.reshape(J[:, 0, :], (-1, 3, 1))), dim=2)))
-        for i in range(1, self.kintree_table.shape[1]):
-            g.append(
-                torch.matmul(
-                    g[parent[i]],
-                    self.with_zeros(
-                        torch.cat((R_cube_big[:, i], torch.reshape(J[:, i, :] - J[:, parent[i], :], (-1, 3, 1))), dim=2)
-                    )
-                )
-            )
-        
-
-        g = torch.stack(g, dim=1)
-
-        G = g - \
-            self.pack(
-                torch.matmul(
-                    g,
-                    torch.reshape(
-                        torch.cat((J, torch.zeros((batch_num, 24, 1), dtype=torch.float64).to(self.device)), dim=2),
-                        (batch_num, 24, 4, 1)
-                    )     
-                )
-            )
-        # Restart from here
-        T = torch.tensordot(G, self.weights, dims=([1], [1])).permute(0, 3, 1, 2)
-        rest_shape_h = torch.cat(
-            (v_posed, torch.ones((batch_num, v_posed.shape[1], 1), dtype=torch.float64).to(self.device)), dim=2
-        )
-        v = torch.matmul(T, torch.reshape(rest_shape_h, (batch_num, -1, 4, 1)))
-        v = torch.reshape(v, (batch_num, -1, 4))[:, :, :3]
-
-        if trans == None:
-            self.verts = v
-            self.joints = g[:, :, :3, 3]
-        else:
-            self.verts = v + torch.reshape(trans, (batch_num, 1, 3))
-            self.joints = g[:, :, :3, 3] + torch.reshape(trans, (batch_num, 1, 3))

@@ -389,8 +389,8 @@ def generate_data():
             # print(beta.shape, theta.shape, gender.shape, joint.shape)
 
             f = theta.shape[0]
-            if f != 10:
-                print('The length of the sequence is not 10, so ignore it.')
+            if f != 100:
+                print('The length of the sequence is not 100, so ignore it.')
                 continue
 
             marker = np.zeros((f, m, 3))                                                # 3D coordinates of markers with size of (f, m, 3)

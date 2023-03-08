@@ -9,12 +9,14 @@ class BaseOptionParser():
         self.parser.add_argument('-data_path', type=str, default='./data/', help='the path of generated data')
         self.parser.add_argument('-m', type=int, default=67, help='the number of markers in each frame')
         self.parser.add_argument('-f', type=int, default=10, help='the number of frames in each sequence')
+        self.parser.add_argument('-stride', type=int, default=16, help='data stride in training set')
 
         # network
         self.parser.add_argument('-d_i', type=int, default=3, help='the dimision of input')
         self.parser.add_argument('-d_o', type=int, default=3, help='the dimision of output')
         self.parser.add_argument('-d_model', type=int, default=1024)
-        self.parser.add_argument('-n_sample', type=int, default=8, help='the number of sampling point')
+        self.parser.add_argument('-k', type=int, default=8, help='the number of sampling points')
+        self.parser.add_argument('-l', type=int, default=1, help='the number of sampling frames in one side')
         self.parser.add_argument('-n_heads', type=int, default=8)
         self.parser.add_argument('-enc_n_layers', type=int, default=3)
         self.parser.add_argument('-dec_n_layers', type=int, default=8)
@@ -30,7 +32,7 @@ class BaseOptionParser():
 
         # train and val
         self.parser.add_argument('-seed', type=int, default=100, help='the seed for random')
-        self.parser.add_argument('-bs', type=int, default=16, help='batch size of training')
+        self.parser.add_argument('-bs', type=int, default=8, help='batch size of training')
         self.parser.add_argument('-no_tb', action='store_true', help='do not use tensorboard')
         self.parser.add_argument('-output_path', type=str, default='./experiments/', help='path to save model and log')
         self.parser.add_argument('-exp_name', type=str, default='1_d1024', help='the experiment name to create path')
@@ -41,8 +43,8 @@ class BaseOptionParser():
         self.parser.add_argument('-grad_clip', type=float, default=1.0, help='gradient clip')
         self.parser.add_argument('-rate', type=float, default=0.2)
         self.parser.add_argument('-lambda1', type=float, default=1.0, help='weight of l_d in loss function')
-        self.parser.add_argument('-lambda2', type=float, default=5.0, help='weight of l_j in loss function')
-        self.parser.add_argument('-lambda3', type=float, default=5.0, help='weight of l_v in loss function')
+        self.parser.add_argument('-lambda2', type=float, default=1.0, help='weight of l_j in loss function')
+        self.parser.add_argument('-lambda3', type=float, default=1.0, help='weight of l_v in loss function')
 
         # optimizer
         self.parser.add_argument('-optim', type=str, choices=['warmup', 'cosine', 'step'], default='cosine')
