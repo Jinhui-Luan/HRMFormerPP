@@ -23,12 +23,14 @@ from plyfile import PlyData, PlyElement
 
 
 class MyDataset(Dataset):
-    def __init__(self, marker, theta, beta, vertex, joint):
+    def __init__(self, marker, theta, beta, vertex, joint, theta_max, theta_min):
         self.marker = marker
         self.theta = theta
         self.beta = beta
         self.vertex = vertex
         self.joint = joint
+        self.theta_max = theta_max
+        self.theta_min = theta_min
 
     def __len__(self):
         return len(self.marker)
@@ -39,7 +41,9 @@ class MyDataset(Dataset):
             'theta': self.theta[index],
             'beta': self.beta[index],
             'vertex': self.vertex[index],
-            'joint': self.joint[index]
+            'joint': self.joint[index],
+            'theta_max': self.theta_max,
+            'theta_min': self.theta_min
         }
 
 
@@ -172,13 +176,15 @@ def get_data_loader(data_path, batch_size, mode, m, stride):
     beta = torch.Tensor(data['beta'])[::stride].to(torch.float32)               # (n_seq, f, 10)
     vertex = torch.Tensor(data['vertex'])[::stride].to(torch.float32)           # (n_seq, f, v, 3)
     joint = torch.Tensor(data['joint'])[::stride].to(torch.float32)             # (n_seq, f, j, 3)
+    theta_max = torch.Tensor(data['theta_max']).to(torch.float32)               # (j, 3)
+    theta_min = torch.Tensor(data['theta_min']).to(torch.float32)               # (j, 3)
 
-    # for i in range(marker.shape[0]):
-    #     marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
+    for i in range(marker.shape[0]):
+        marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
 
     print('{} dataset shape: {}.'.format(mode, marker.shape).capitalize())
 
-    dataset = MyDataset(marker, theta, beta, vertex, joint)
+    dataset = MyDataset(marker, theta, beta, vertex, joint, theta_max, theta_min)
     if mode == 'train':
         dataloader = DataLoader(dataset, batch_size, shuffle=True)
     else:
@@ -240,13 +246,13 @@ def weighted_data_loss(y_pred, y_gt, rate, criterion):
 def regularization_loss(y, max, min):
     '''
     y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
-    max (min): the maximum (minimum) of theta in dataset with size of (24, 3)
+    max (min): the maximum (minimum) of theta in dataset with size of (bs, 24, 3)
     return: the regularization term of loss
     '''
-    bs, f, _, _ = y.shape
+    _, f, _, _ = y.shape
     zero = torch.zeros_like(y)
-    max_unsqueeze = max.unsqueeze(0).unsqueeze(0).repeat(bs, f, 1, 1)
-    min_unsqueeze = min.unsqueeze(0).unsqueeze(0).repeat(bs, f, 1, 1)
+    max_unsqueeze = max.unsqueeze(1).repeat(1, f, 1, 1)
+    min_unsqueeze = min.unsqueeze(1).repeat(1, f, 1, 1)
 
     return torch.maximum(zero, y-max_unsqueeze).sum() + torch.maximum(zero, min_unsqueeze-y).sum()
 
@@ -274,8 +280,6 @@ def temporal_smooth_loss(y, rate, criterion):
                 loss += l
         
     return loss / (y.shape[2] * (y.shape[1]-1))
-
-    return 
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
