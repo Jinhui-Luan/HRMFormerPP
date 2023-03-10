@@ -790,10 +790,11 @@ class Transformer1(nn.Module):
         trg = torch.zeros_like(trg_pos)                                                         # (spa_n_q, bs*f, d_model)  
  
         # nn.MultiHeadAttention in decoder expects features of size (N, B, C)
-        dec_features = self.decoder(trg, enc_features, src_pos=src_pos, trg_pos=trg_pos)[0]                             # (spa_n_q, bs*f, d_model)
-        dec_features = dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 2, 0, 3)                                # (bs, tem_n_q, spa_n_q, d_model)
+        enc_features = enc_features.reshape(bs*f, m, -1).permute(1, 0, 2)                       # (m, bs*f, d_model)
+        dec_features = self.decoder(trg, enc_features, src_pos=src_pos, trg_pos=trg_pos)[0]     # (spa_n_q, bs*f, d_model)
+        dec_features = dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 2, 0, 3)        # (bs, tem_n_q, spa_n_q, d_model)
  
-        output = self.trg_prj(dec_features)                                                                             # (bs, tem_n_q, spa_n_q, d_o)
+        output = self.trg_prj(dec_features)                                                     # (bs, tem_n_q, spa_n_q, d_o)
         
         return output
 

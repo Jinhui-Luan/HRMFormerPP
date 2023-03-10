@@ -388,17 +388,17 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         # vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
         # joint = data['joint'].to(device)                            # (bs, f, 24, 3)
 
-        bs, f, _, _ = marker.shape
+        bs, f, m, _ = marker.shape
         scheduler.optimizer.zero_grad()
         theta_pred = model(marker)                                  # (bs, f, spa_n_q, 3)
 
         smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
-        joint_pred = smpl_model.joints.reshape(bs, f, 24, 3)      
-        vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3)
+        joint_pred = smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32)      
+        vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
 
         smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
-        joint= smpl_model.joints.reshape(bs, f, 24, 3)      
-        vertex = smpl_model.verts.reshape(bs, f, 6890, 3)
+        joint= smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32)       
+        vertex = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
 
         mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
         mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
@@ -408,7 +408,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-        l_cd = args.lambda5 * criterion_cd(marker, vertex_pred, bidirectional=True)
+        l_cd = args.lambda5 * criterion_cd(marker.reshape(bs*f, m, 3), vertex_pred.reshape(bs*f, 6890, 3), bidirectional=True)
         l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
@@ -458,17 +458,17 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             # vertex = data['vertex'].to(device)
             # joint = data['joint'].to(device)
 
-            bs, f, _, _ = marker.shape
+            bs, f, m, _ = marker.shape
 
             theta_pred = model(marker)
 
             smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
-            joint_pred = smpl_model.joints.reshape(bs, f, 24, 3)
-            vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3)
+            joint_pred = smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32) 
+            vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
 
             smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
-            joint= smpl_model.joints.reshape(bs, f, 24, 3)      
-            vertex = smpl_model.verts.reshape(bs, f, 6890, 3)
+            joint= smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32)       
+            vertex = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
 
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
@@ -478,7 +478,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-            l_cd = args.lambda5 * criterion_cd(marker, vertex_pred, bidirectional=True)
+            l_cd = args.lambda5 * criterion_cd(marker.reshape(bs*f, m, 3), vertex_pred.reshape(bs*f, 6890, 3), bidirectional=True)
             l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
