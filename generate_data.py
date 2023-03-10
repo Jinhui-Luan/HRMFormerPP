@@ -460,9 +460,31 @@ def generate_data():
         print('Successfully save {} data, and the total number of sequences is {}!'.format(mode, marker.shape[0]))
 
 
+def get_theta_boundary():
+    train_data = torch.load('./data/train_67.pt')  
+    test_data = torch.load('./data/test_67.pt')  
+    val_data = torch.load('./data/val_67.pt')  
+
+    train_theta_max = train_data['theta_max'].unsqueeze(0)
+    train_theta_min = train_data['theta_min'].unsqueeze(0)
+    test_theta_max = test_data['theta_max'].unsqueeze(0)
+    test_theta_min = test_data['theta_min'].unsqueeze(0)
+    val_theta_max = val_data['theta_max'].unsqueeze(0)
+    val_theta_min = val_data['theta_min'].unsqueeze(0)
+
+    theta_max = torch.cat([train_theta_max, test_theta_max, val_theta_max], dim=0).max(dim=0)[0]
+    theta_min = torch.cat([train_theta_min, test_theta_min, val_theta_min], dim=0).min(dim=0)[0]
+    
+    train_data['theta_max'] = test_data['theta_max'] = val_data['theta_max'] = theta_max
+    train_data['theta_min'] = test_data['theta_min'] = val_data['theta_min'] = theta_min
+
+    torch.save(train_data, os.path.join('./data', 'train_67.pt'), pickle_protocol=4)
+    torch.save(test_data, os.path.join('./data', 'test_67.pt'), pickle_protocol=4)
+    torch.save(val_data, os.path.join('./data', 'val_67.pt'), pickle_protocol=4)
+
+
 if __name__ == '__main__':
     # generate_data()
-    # save2file()
-    data = torch.load('./data/val_67.pt')  
-    print(data['marker'].shape, data['vertex'].shape, data['joint'].shape, data['theta'].shape, data['beta'].shape)
+    get_theta_boundary()
+
 

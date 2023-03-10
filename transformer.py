@@ -656,7 +656,6 @@ class Transformer1(nn.Module):
         self.spa_emb = args.spa_emb
         self.tem_emb = args.tem_emb
         self.spa_n_q = args.spa_n_q
-        self.tem_n_q = args.tem_n_q
 
         if self.spa_emb:
             self.spatial_embedding = SpatialEmbedding(
@@ -724,8 +723,7 @@ class Transformer1(nn.Module):
             enc_n_layers=args.enc_n_layers
         )
 
-        self.spa_query_embed = nn.Embedding(args.spa_n_q, args.d_model)
-        self.tem_query_embed = nn.Embedding(args.tem_n_q, args.d_model)
+        self.query_embed = nn.Embedding(args.spa_n_q, args.d_model)
 
         self.dec_layer = TransformerDecoderLayer(
             d_model=args.d_model,
@@ -737,18 +735,10 @@ class Transformer1(nn.Module):
             norm_name=args.norm_name
         )
 
-        self.spa_decoder = TransformerDecoder(
+        self.decoder = TransformerDecoder(
             dec_layer=self.dec_layer,
             dec_n_layers=args.dec_n_layers
         )
-
-        self.tem_decoder = TransformerDecoder(
-            dec_layer=self.dec_layer,
-            dec_n_layers=args.dec_n_layers
-        )
-
-        self.spa_n_prj = nn.Linear(args.f, args.tem_n_q, bias=False)
-        self.tem_n_prj = nn.Linear(args.m, args.spa_n_q, bias=False)
 
         self.trg_prj = nn.Linear(args.d_model, args.d_o, bias=False)
 
@@ -789,27 +779,20 @@ class Transformer1(nn.Module):
         spa_enc_features = self.spa_encoder(spa_emb_features, src_pos=src_pos)[0]               # (m, bs*f, d_model)
         tem_enc_features = self.tem_encoder(tem_emb_features, src_pos=src_pos)[0]               # (f, bs*m, d_model)
 
+        enc_features = spa_enc_features.reshape(m, bs, f, -1).permute(1, 2, 0, 3) + tem_enc_features.reshape(f, bs, m, -1).permute(1, 0, 2, 3)  # (bs, f, m, d_model)
+                                                           
         if encoder_only:
-            enc_features = spa_enc_features.reshape(m, bs, f, -1).permute(1, 2, 0, 3) + tem_enc_features.reshape(f, bs, m, -1).permute(1, 0, 2, 3)  # (bs, f, m, d_model)
             return self.trg_prj(enc_features)                                                   # (bs, f, m, d_o)
 
         # initialize pose query
-        spa_trg_pos = self.spa_query_embed.weight                                               # (spa_n_q, d_model)
-        spa_trg_pos = spa_trg_pos.unsqueeze(1).repeat(1, bs*f, 1)                               # (spa_n_q, bs*f, d_model)                                
-        spa_trg = torch.zeros_like(spa_trg_pos)                                                 # (spa_n_q, bs*f, d_model)  
-        tem_trg_pos = self.tem_query_embed.weight                                               # (tem_n_q, d_model)
-        tem_trg_pos = tem_trg_pos.unsqueeze(1).repeat(1, bs*m, 1)                               # (tem_n_q, bs*m, d_model)                                
-        tem_trg = torch.zeros_like(tem_trg_pos)                                                 # (tem_n_q, bs*m, d_model)    
-
+        trg_pos = self.query_embed.weight                                                       # (spa_n_q, d_model)
+        trg_pos = trg_pos.unsqueeze(1).repeat(1, bs*f, 1)                                       # (spa_n_q, bs*f, d_model)                                
+        trg = torch.zeros_like(trg_pos)                                                         # (spa_n_q, bs*f, d_model)  
+ 
         # nn.MultiHeadAttention in decoder expects features of size (N, B, C)
-        spa_dec_features = self.spa_decoder(spa_trg, spa_enc_features, src_pos=src_pos, trg_pos=spa_trg_pos)[0]         # (spa_n_q, bs*f, d_model)
-        tem_dec_features = self.tem_decoder(tem_trg, tem_enc_features, src_pos=src_pos, trg_pos=tem_trg_pos)[0]         # (tem_n_q, bs*m, d_model)
-
-        spa_dec_features = self.spa_n_prj(spa_dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 0, 3, 2))        # (bs, spa_n_q, d_model, tem_n_q)
-        tem_dec_features = self.tem_n_prj(tem_dec_features.reshape(self.tem_n_q, bs, m, -1).permute(1, 0, 3, 2))        # (bs, tem_n_q, d_model, spa_n_q)
-
-        dec_features = spa_dec_features.permute(0, 3, 1, 2) + tem_dec_features.permute(0, 1, 3, 2)                      # (bs, tem_n_q, spa_n_q, d_model)   
-
+        dec_features = self.decoder(trg, enc_features, src_pos=src_pos, trg_pos=trg_pos)[0]                             # (spa_n_q, bs*f, d_model)
+        dec_features = dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 2, 0, 3)                                # (bs, tem_n_q, spa_n_q, d_model)
+ 
         output = self.trg_prj(dec_features)                                                                             # (bs, tem_n_q, spa_n_q, d_o)
         
         return output
