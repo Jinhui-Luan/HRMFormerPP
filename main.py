@@ -226,7 +226,7 @@ def weighted_data_loss(y_pred, y_gt, rate, criterion):
     criterion: the criterion for calculating loss, e.g. MESLoss
     return: the data term of loss
     '''
-
+    _, _, j, _ = y_pred.shape
     root = [0, 3, 6, 9]
     child1 = [1, 2, 12, 13, 14, 16, 17]
     child2 = [4, 5, 15, 18, 19]
@@ -241,7 +241,8 @@ def weighted_data_loss(y_pred, y_gt, rate, criterion):
             # IPython.embed()
             loss += l
         
-    return loss / y_pred.shape[2]
+    return loss / j
+
 
 def regularization_loss(y, max, min):
     '''
@@ -249,12 +250,12 @@ def regularization_loss(y, max, min):
     max (min): the maximum (minimum) of theta in dataset with size of (bs, 24, 3)
     return: the regularization term of loss
     '''
-    _, f, _, _ = y.shape
+    bs, f, j, _ = y.shape
     zero = torch.zeros_like(y)
     max_unsqueeze = max.unsqueeze(1).repeat(1, f, 1, 1)
     min_unsqueeze = min.unsqueeze(1).repeat(1, f, 1, 1)
 
-    return torch.maximum(zero, y-max_unsqueeze).sum() + torch.maximum(zero, min_unsqueeze-y).sum()
+    return (torch.maximum(zero, y-max_unsqueeze).sum() + torch.maximum(zero, min_unsqueeze-y).sum()) / (bs * f * j)
 
 
 def temporal_smooth_loss(y, rate, criterion):
@@ -264,6 +265,7 @@ def temporal_smooth_loss(y, rate, criterion):
     criterion: the criterion for calculating loss, e.g. nn.MESLoss
     return: the temporal smooth term of loss
     '''
+    _, f, j, _ = y.shape
     root = [0, 3, 6, 9]
     child1 = [1, 2, 12, 13, 14, 16, 17]
     child2 = [4, 5, 15, 18, 19]
@@ -279,7 +281,21 @@ def temporal_smooth_loss(y, rate, criterion):
                 # IPython.embed()
                 loss += l
         
-    return loss / (y.shape[2] * (y.shape[1]-1))
+    return loss / ((f-1) * j)
+
+
+def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
+    '''
+    pc1 & pc2: the point cloud used to compute chamfer distance with size of (bs, f, n, 3)
+    criterion_cd: the ChamferDistance object
+    return: the chamfer distance  loss
+    '''
+    bs, f, n1, _ = pc1.shape
+    _, _, n2, _ = pc2.shape
+    loss = criterion_cd(pc1.reshape(bs*f, n1, 3), pc2.reshape(bs*f, n2, 3), bidirectional=bidirectional)
+
+    return loss / (n1 * n2 / 2)
+
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
@@ -408,7 +424,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-        l_cd = args.lambda5 * criterion_cd(marker.reshape(bs*f, m, 3), vertex_pred.reshape(bs*f, 6890, 3), bidirectional=True)
+        l_cd = args.lambda5 * chamfer_distance_loss(marker, vertex_pred, criterion_cd)
         l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
@@ -478,7 +494,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-            l_cd = args.lambda5 * criterion_cd(marker.reshape(bs*f, m, 3), vertex_pred.reshape(bs*f, 6890, 3), bidirectional=True)
+            l_cd = args.lambda5 * 2 * chamfer_distance_loss(marker, vertex_pred, criterion_cd)
             l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
