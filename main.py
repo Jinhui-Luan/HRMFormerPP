@@ -179,8 +179,8 @@ def get_data_loader(data_path, batch_size, mode, m, stride):
     theta_max = torch.Tensor(data['theta_max']).to(torch.float32)               # (j, 3)
     theta_min = torch.Tensor(data['theta_min']).to(torch.float32)               # (j, 3)
 
-    for i in range(marker.shape[0]):
-        marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
+    # for i in range(marker.shape[0]):
+    #     marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
 
     print('{} dataset shape: {}.'.format(mode, marker.shape).capitalize())
 
@@ -294,7 +294,7 @@ def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
     _, _, n2, _ = pc2.shape
     loss = criterion_cd(pc1.reshape(bs*f, n1, 3), pc2.reshape(bs*f, n2, 3), bidirectional=bidirectional)
 
-    return loss / (n1 * n2 / 2)
+    return loss / (bs * f)
 
 
 
