@@ -258,6 +258,19 @@ def regularization_loss(y, max, min):
     return (torch.maximum(zero, y-max_unsqueeze).sum() + torch.maximum(zero, min_unsqueeze-y).sum()) / (bs * f * j)
 
 
+def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
+    '''
+    pc1 & pc2: the point cloud used to compute chamfer distance with size of (bs, f, n, 3)
+    criterion_cd: the ChamferDistance object
+    return: the chamfer distance  loss
+    '''
+    bs, f, n1, _ = pc1.shape
+    _, _, n2, _ = pc2.shape
+    loss = criterion_cd(pc1.reshape(bs*f, n1, 3), pc2.reshape(bs*f, n2, 3), bidirectional=bidirectional)
+
+    return loss / (n1 + n2)
+
+
 def temporal_smooth_loss(y, rate, criterion):
     '''
     y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
@@ -282,20 +295,6 @@ def temporal_smooth_loss(y, rate, criterion):
                 loss += l
         
     return loss / ((f-1) * j)
-
-
-def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
-    '''
-    pc1 & pc2: the point cloud used to compute chamfer distance with size of (bs, f, n, 3)
-    criterion_cd: the ChamferDistance object
-    return: the chamfer distance  loss
-    '''
-    bs, f, n1, _ = pc1.shape
-    _, _, n2, _ = pc2.shape
-    loss = criterion_cd(pc1.reshape(bs*f, n1, 3), pc2.reshape(bs*f, n2, 3), bidirectional=bidirectional)
-
-    return loss / (bs * f)
-
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
@@ -404,7 +403,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         # vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
         # joint = data['joint'].to(device)                            # (bs, f, 24, 3)
 
-        bs, f, m, _ = marker.shape
+        bs, f, _, _ = marker.shape
         scheduler.optimizer.zero_grad()
         theta_pred = model(marker)                                  # (bs, f, spa_n_q, 3)
 
