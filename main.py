@@ -221,12 +221,12 @@ def load_checkpoint(model, args, device, start_epoch, scheduler=None):
 
 def weighted_data_loss(y_pred, y_gt, rate, criterion):
     '''
-    y_pred & y_gt: pose parameters theta of SMPL model with size of (bs, f, 24, 3)
+    y_pred & y_gt: pose parameters theta of SMPL model with size of (bs, 24, 3)
     rate: the rate of the weight between parent and child nodes
     criterion: the criterion for calculating loss, e.g. MESLoss
     return: the data term of loss
     '''
-    _, _, j, _ = y_pred.shape
+    _, j, _ = y_pred.shape
     root = [0, 3, 6, 9]
     child1 = [1, 2, 12, 13, 14, 16, 17]
     child2 = [4, 5, 15, 18, 19]
@@ -260,13 +260,13 @@ def regularization_loss(y, max, min):
 
 def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
     '''
-    pc1 & pc2: the point cloud used to compute chamfer distance with size of (bs, f, n, 3)
+    pc1 & pc2: the point cloud used to compute chamfer distance with size of (bs, n, 3)
     criterion_cd: the ChamferDistance object
     return: the chamfer distance  loss
     '''
-    bs, f, n1, _ = pc1.shape
-    _, _, n2, _ = pc2.shape
-    loss = criterion_cd(pc1.reshape(bs*f, n1, 3), pc2.reshape(bs*f, n2, 3), bidirectional=bidirectional)
+    _, n1, _ = pc1.shape
+    _, n2, _ = pc2.shape
+    loss = criterion_cd(pc1, pc2, bidirectional=bidirectional)
 
     return loss / (n1 + n2)
 
@@ -408,18 +408,18 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         theta_pred = model(marker)                                  # (bs, f, spa_n_q, 3)
 
         smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
-        joint_pred = smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32)      
-        vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
+        joint_pred = smpl_model.joints.to(torch.float32)            # (bs*f, 24, 3)   
+        vertex_pred = smpl_model.verts.to(torch.float32)            # (bs*f, 6890, 3)
 
         smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
-        joint= smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32)       
-        vertex = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
+        joint= smpl_model.joints.to(torch.float32)                  # (bs*f, 24, 3)
+        vertex = smpl_model.verts.to(torch.float32)                 # (bs*f, 6890, 3)
 
         mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
         mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
 
         # l_d = args.lambda1 * criterion(theta_pred, theta)
-        l_d = args.lambda1 * weighted_data_loss(theta_pred, theta, args.rate, criterion_mse)
+        l_d = args.lambda1 * weighted_data_loss(theta_pred.reshape(bs*f, args.spa_n_q, 3), theta.reshape(bs*f, args.spa_n_q, 3), args.rate, criterion_mse)
         l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
@@ -478,12 +478,12 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             theta_pred = model(marker)
 
             smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
-            joint_pred = smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32) 
-            vertex_pred = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
+            joint_pred = smpl_model.joints.to(torch.float32) 
+            vertex_pred = smpl_model.verts.to(torch.float32) 
 
             smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
-            joint= smpl_model.joints.reshape(bs, f, 24, 3).to(torch.float32)       
-            vertex = smpl_model.verts.reshape(bs, f, 6890, 3).to(torch.float32) 
+            joint= smpl_model.joints.to(torch.float32)       
+            vertex = smpl_model.verts.to(torch.float32) 
 
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
@@ -493,7 +493,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-            l_cd = args.lambda5 * 2 * chamfer_distance_loss(marker, vertex_pred, criterion_cd)
+            l_cd = args.lambda5  * chamfer_distance_loss(marker, vertex_pred, criterion_cd)
             l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
