@@ -237,7 +237,7 @@ def weighted_data_loss(y_pred, y_gt, rate, criterion):
         # print(i, part, rate ** i)
         for idx in part:
             # print(idx)
-            l = criterion(y_pred[:, :, idx, :], y_gt[:, :, idx, :]) * rate ** i
+            l = criterion(y_pred[:, idx, :], y_gt[:, idx, :]) * rate ** i
             # IPython.embed()
             loss += l
         
@@ -403,7 +403,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         # vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
         # joint = data['joint'].to(device)                            # (bs, f, 24, 3)
 
-        bs, f, _, _ = marker.shape
+        bs, f, m, _ = marker.shape
         scheduler.optimizer.zero_grad()
         theta_pred = model(marker)                                  # (bs, f, spa_n_q, 3)
 
@@ -423,8 +423,9 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-        l_cd = args.lambda5 * chamfer_distance_loss(marker, vertex_pred, criterion_cd)
-        l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
+        l_cd = args.lambda5 * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
+        l_ts = 0
+        # l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
         # IPython.embed()
@@ -489,12 +490,13 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
 
             # l_d = args.lambda1 * criterion(theta_pred, theta)
-            l_d = args.lambda1 * weighted_data_loss(theta_pred, theta, args.rate, criterion_mse)
+            l_d = args.lambda1 * weighted_data_loss(theta_pred.reshape(bs*f, args.spa_n_q, 3), theta.reshape(bs*f, args.spa_n_q, 3), args.rate, criterion_mse)
             l_j = args.lambda2 * abs((joint_pred - joint)).sum(dim=-1).mean()
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
-            l_cd = args.lambda5  * chamfer_distance_loss(marker, vertex_pred, criterion_cd)
-            l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
+            l_cd = args.lambda5  * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
+            # l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
+            l_ts = 0
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
             loss.append(l)

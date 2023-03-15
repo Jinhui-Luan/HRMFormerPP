@@ -7,6 +7,7 @@ import glob
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE' 
 import pickle
+import IPython
 
 
 class SMPLModel():
@@ -330,13 +331,10 @@ def split_train_val_test(length, train_ratio, val_ratio, **data):
     return train_data, val_data, test_data
 
 
-def generate_data():
+def generate_data(args):
     '''
     This function loads thetas, betas, genders, joint coordinates and generates markers and their labels from surreal dataset
     '''
-    parser = BaseOptionParser()
-    args = parser.parse_args()
-
     # get markerset information and randomly choose one
     np.random.seed(args.seed)
     m2b_distance = 0.0095
@@ -354,14 +352,6 @@ def generate_data():
 
     # define the path of info file in surreal dataset and the path to save markers and poses
     for mode in ['train', 'test', 'val']:
-        dataset = {}
-        markers = []
-        thetas = []
-        betas = []
-        genders = []
-        joints = []
-        vertices = []
-        
         data_path = glob.glob(os.path.join(args.basic_path, 'cmu', mode, 'run1', '*', '*info.mat'))   
         data_path.sort() 
         # print(data_path)
@@ -373,20 +363,17 @@ def generate_data():
         # print(face.shape)
 
         # generate marker and pose files in specific range
-        for i in range(len(data_path)):
+        for i in range(2):
+            data = {}
             subject = data_path[i].split('/')[-2]
             seq = data_path[i].split('/')[-1].rsplit('_')[-2]
             print('{}({}/{}): Processing the data for sequence {} of subject {}...'.format(mode, str(i+1), str(len(data_path)), seq, subject).capitalize())
 
             database = scio.loadmat(data_path[i])
             
-            beta = np.array(database['shape'].T)[::10, :]                               # shape parameters with size of (f, 10)
-            theta = np.array(database['pose'].T)[::10, :].reshape(-1, 24, 3)            # pose parameters with size of (f, 24, 3)
-            gender = np.array(database['gender'])[::10, :]                              # 0: 'female', 1: 'male', gender with size of (f, 1)
-            # joint = np.array(database['joints3D'].T)[::10, :]                           # 3D coordinates of joints with size of (f, 24, 3)
-            # if joint.ndim != 3:
-            #     joint = joint[:, :, None]
-            # print(beta.shape, theta.shape, gender.shape, joint.shape)
+            beta = np.array(database['shape'].T)                                        # shape parameters with size of (f, 10)
+            theta = np.array(database['pose'].T).reshape(-1, 24, 3)                     # pose parameters with size of (f, 24, 3)
+            gender = np.array(database['gender'])                                       # 0: 'female', 1: 'male', gender with size of (f, 1)
 
             f = theta.shape[0]
             if f != 100:
@@ -412,79 +399,73 @@ def generate_data():
 
                 for mrk_id, vid in enumerate(chosen_marker_set.values()):
                     marker[fIdx, mrk_id, :] = torch.Tensor(vertex[fIdx, :][vid]) + torch.Tensor(cur_m2b_distance) * vn[vid]
-                
-            print('Successfully generate data!')    
 
             # marker = marker.astype(np.float32)  
             # marker = marker.reshape(f, -1)                                      # (f, m*3)
             # joint = joint.reshape(f, -1)                                        # (f, 24*3)
 
             # print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
-            markers.append(marker)
-            vertices.append(vertex)
-            joints.append(joint)
-            thetas.append(theta)
-            betas.append(beta)
-            genders.append(gender)
+            data['label'] = label
+            data['marker'] = torch.from_numpy(marker).to(torch.float32)                                             # (f, m, 3)
+            # dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)                                         # (f, v, 3)
+            data['joint'] = torch.from_numpy(joint).to(torch.float32)                                               # (f, j, 3)
+            data['theta'] = torch.from_numpy(theta).to(torch.float32)                                               # (f, j, 3)
+            data['beta'] = torch.from_numpy(beta).to(torch.float32)                                                 # (f, 10)
+            data['gender'] = torch.from_numpy(gender).to(torch.int32)                                               # (f, 1)
+
+            os.makedirs(os.path.join(args.data_path, mode, subject), exist_ok=True)
+            torch.save(data, os.path.join(args.data_path, mode, subject, seq + '.pt'), pickle_protocol=4)
+            print('Successfully generate data!')    
 
 
-        marker = np.array(markers)
-        vertex = np.array(vertices)
-        joint = np.array(joints)
-        theta = np.array(thetas)
-        beta = np.array(betas)
-        gender = np.array(genders)
-        
-        # marker = np.vstack(markers)                                         # (f, m*3)
-        # marker = marker.reshape(-1, m, 3)                                   # (f, m, 3)
-        # theta = np.vstack(thetas)                                           # (f, 72)
-        # theta = theta.reshape(-1, 24, 3)                                    # (f, 24, 3)
-        # beta = np.vstack(betas)                                             # (f, 10)
-        # gender = np.vstack(genders)                                         # (f, 1)
-        # joint = np.vstack(joints)                                           # (f, 24*3)
-        # joint = joint.reshape(-1, 24, 3)                                    # (f, 24, 3)
+def read_and_merge(args):
+    for mode in ['train', 'test', 'val']:
+        print('Start reading and merging {} data.'.format(mode))
+        dataset = {}
+        marker = []
+        # vertex = []
+        joint = []
+        theta = []
+        beta = []
+        gender = []
 
-        # print(marker.shape, vertex.shape, joint.shape, theta.shape, beta.shape, gender.shape)
+        data_path = glob.glob(os.path.join(args.data_path, mode, '*', '*.pt')) 
+        label = torch.load(data_path[0])['label']
+
+        for i in range(len(data_path)):
+            data = torch.load(data_path[i])
+            marker.append(data['marker'])
+            # vertex.append(data['vertex'])
+            joint.append(data['joint'])
+            theta.append(data['theta'])
+            beta.append(data['beta'])
+            gender.append(data['gender'])
+
+        marker = torch.stack(marker) 
+        # vertex = torch.stack(vertex)
+        joint = torch.stack(joint)
+        theta = torch.stack(theta)
+        beta = torch.stack(beta)
+        gender = torch.stack(gender)
 
         dataset['label'] = label
-        dataset['marker'] = torch.from_numpy(marker).to(torch.float32)                                          # (n_seq, f, m, 3)
-        dataset['vertex'] = torch.from_numpy(vertex).to(torch.float32)                                          # (n_seq, f, v, 3)
-        dataset['joint'] = torch.from_numpy(joint).to(torch.float32)                                            # (n_seq, f, j, 3)
-        dataset['theta'] = torch.from_numpy(theta).to(torch.float32)                                            # (n_seq, f, j, 3)
-        dataset['beta'] = torch.from_numpy(beta).to(torch.float32)                                              # (n_seq, f, 10)
-        dataset['gender'] = torch.from_numpy(gender).to(torch.int32)
+        dataset['marker'] = marker                                                                              # (n_seq, f, m, 3)
+        # dataset['vertex'] = vertex                                                                             # (n_seq, f, v, 3)
+        dataset['joint'] = joint                                                                                # (n_seq, f, j, 3)
+        dataset['theta'] = theta                                                                                # (n_seq, f, j, 3)
+        dataset['beta'] = beta                                                                                  # (n_seq, f, 10)
+        dataset['gender'] = gender                                                                              # (n_seq, f, 1)
         dataset['theta_max'] = dataset['theta'].max(dim=0)[0].max(dim=0)[0].to(torch.float32)                   # (j, 3)
         dataset['theta_min'] = dataset['theta'].min(dim=0)[0].min(dim=0)[0].to(torch.float32)                   # (j, 3)
 
-        torch.save(dataset, os.path.join(args.data_path, mode + '_' + str(m) + '.pt'), pickle_protocol=4)
-        print('Successfully save {} data, and the total number of sequences is {}!'.format(mode, marker.shape[0]))
-
-
-def get_theta_boundary():
-    train_data = torch.load('./data/train_67.pt')  
-    test_data = torch.load('./data/test_67.pt')  
-    val_data = torch.load('./data/val_67.pt')  
-
-    train_theta_max = train_data['theta_max'].unsqueeze(0)
-    train_theta_min = train_data['theta_min'].unsqueeze(0)
-    test_theta_max = test_data['theta_max'].unsqueeze(0)
-    test_theta_min = test_data['theta_min'].unsqueeze(0)
-    val_theta_max = val_data['theta_max'].unsqueeze(0)
-    val_theta_min = val_data['theta_min'].unsqueeze(0)
-
-    theta_max = torch.cat([train_theta_max, test_theta_max, val_theta_max], dim=0).max(dim=0)[0]
-    theta_min = torch.cat([train_theta_min, test_theta_min, val_theta_min], dim=0).min(dim=0)[0]
-    
-    train_data['theta_max'] = test_data['theta_max'] = val_data['theta_max'] = theta_max
-    train_data['theta_min'] = test_data['theta_min'] = val_data['theta_min'] = theta_min
-
-    torch.save(train_data, os.path.join('./data', 'train_67.pt'), pickle_protocol=4)
-    torch.save(test_data, os.path.join('./data', 'test_67.pt'), pickle_protocol=4)
-    torch.save(val_data, os.path.join('./data', 'val_67.pt'), pickle_protocol=4)
+        torch.save(dataset, os.path.join(args.data_path, mode + '_' + str(args.m) + '.pt'), pickle_protocol=4)
+        print('Successfully read and merge {} data.'.format(mode)) 
 
 
 if __name__ == '__main__':
-    # generate_data()
-    get_theta_boundary()
-
+    parser = BaseOptionParser()
+    args = parser.parse_args()
+    generate_data(args)
+    read_and_merge(args)
+    
 
