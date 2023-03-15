@@ -4,6 +4,7 @@ import torch
 import json
 import numpy as np
 import glob
+import time
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE' 
 import pickle
@@ -364,13 +365,17 @@ def generate_data(args):
 
         # generate marker and pose files in specific range
         for i in range(2):
+            start = time.time()
             data = {}
             subject = data_path[i].split('/')[-2]
             seq = data_path[i].split('/')[-1].rsplit('_')[-2]
             print('{}({}/{}): Processing the data for sequence {} of subject {}...'.format(mode, str(i+1), str(len(data_path)), seq, subject).capitalize())
 
+            if os.path.exists(os.path.join(args.data_path, mode, subject, seq + '.pt')):
+                print('The data file already exists.')
+                continue
+
             database = scio.loadmat(data_path[i])
-            
             beta = np.array(database['shape'].T)                                        # shape parameters with size of (f, 10)
             theta = np.array(database['pose'].T).reshape(-1, 24, 3)                     # pose parameters with size of (f, 24, 3)
             gender = np.array(database['gender'])                                       # 0: 'female', 1: 'male', gender with size of (f, 1)
@@ -415,7 +420,8 @@ def generate_data(args):
 
             os.makedirs(os.path.join(args.data_path, mode, subject), exist_ok=True)
             torch.save(data, os.path.join(args.data_path, mode, subject, seq + '.pt'), pickle_protocol=4)
-            print('Successfully generate data!')    
+            end = time.time()
+            print('Successfully generate data! Time consuming: {:.2f}s'.format(end - start))    
 
 
 def read_and_merge(args):
