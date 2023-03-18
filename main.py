@@ -23,11 +23,10 @@ from plyfile import PlyData, PlyElement
 
 
 class MyDataset(Dataset):
-    def __init__(self, marker, theta, beta, vertex, joint, theta_max, theta_min):
+    def __init__(self, marker, theta, beta, joint, theta_max, theta_min):
         self.marker = marker
         self.theta = theta
         self.beta = beta
-        self.vertex = vertex
         self.joint = joint
         self.theta_max = theta_max
         self.theta_min = theta_min
@@ -40,7 +39,6 @@ class MyDataset(Dataset):
             'marker': self.marker[index],
             'theta': self.theta[index],
             'beta': self.beta[index],
-            'vertex': self.vertex[index],
             'joint': self.joint[index],
             'theta_max': self.theta_max,
             'theta_min': self.theta_min
@@ -167,24 +165,24 @@ def attach_placeholder(X):
     return torch.cat((placeholder, X), dim=1)
 
 
-def get_data_loader(data_path, batch_size, mode, m, stride):
+def get_data_loader(data_path, batch_size, mode, m, f, stride):
     data = torch.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'))
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
-
-    marker = torch.Tensor(data['marker'])[::stride].to(torch.float32)           # (n_seq, f, m, 3)
-    theta = torch.Tensor(data['theta'])[::stride].to(torch.float32)             # (n_seq, f, j, 3)
-    beta = torch.Tensor(data['beta'])[::stride].to(torch.float32)               # (n_seq, f, 10)
-    vertex = torch.Tensor(data['vertex'])[::stride].to(torch.float32)           # (n_seq, f, v, 3)
-    joint = torch.Tensor(data['joint'])[::stride].to(torch.float32)             # (n_seq, f, j, 3)
-    theta_max = torch.Tensor(data['theta_max']).to(torch.float32)               # (j, 3)
-    theta_min = torch.Tensor(data['theta_min']).to(torch.float32)               # (j, 3)
+    
+    marker = torch.Tensor(data['marker']).reshape(-1, f, m, 3)[::stride].to(torch.float32)              # (n_seq, f, m, 3)
+    theta = torch.Tensor(data['theta']).reshape(-1, f, 24, 3)[::stride].to(torch.float32)               # (n_seq, f, j, 3)
+    beta = torch.Tensor(data['beta']).reshape(-1, f, 10)[::stride].to(torch.float32)                    # (n_seq, f, 10)
+    # vertex = torch.Tensor(data['vertex']).reshape(-1, f, 6890, 3)[::stride].to(torch.float32)           # (n_seq, f, v, 3)
+    joint = torch.Tensor(data['joint']).reshape(-1, f, 24, 3)[::stride].to(torch.float32)               # (n_seq, f, j, 3)
+    theta_max = torch.Tensor(data['theta_max']).to(torch.float32)                                       # (j, 3)
+    theta_min = torch.Tensor(data['theta_min']).to(torch.float32)                                       # (j, 3)
 
     # for i in range(marker.shape[0]):
     #     marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
 
     print('{} dataset shape: {}.'.format(mode, marker.shape).capitalize())
 
-    dataset = MyDataset(marker, theta, beta, vertex, joint, theta_max, theta_min)
+    dataset = MyDataset(marker, theta, beta, joint, theta_max, theta_min)
     if mode == 'train':
         dataloader = DataLoader(dataset, batch_size, shuffle=True)
     else:
@@ -424,8 +422,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
         l_cd = args.lambda5 * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-        l_ts = 0
-        # l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
+        l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
         # IPython.embed()
@@ -495,8 +492,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
             l_cd = args.lambda5  * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-            # l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
-            l_ts = 0
+            l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
             loss.append(l)
@@ -658,8 +654,8 @@ def main():
             f.write(str(model))
             f.writelines('----------- end ----------' + '\n')
         
-        dl_train = get_data_loader(args.data_path, args.bs, 'train', args.m, args.stride)
-        dl_val = get_data_loader(args.data_path, args.bs, 'val', args.m, 1)
+        dl_train = get_data_loader(args.data_path, args.bs, 'train', args.m, args.f, args.stride)
+        dl_val = get_data_loader(args.data_path, args.bs, 'val', args.m, args.f, 1)
 
         # create optimizer and scheduler
         optimizer = AdamW(model.parameters(), lr=args.base_lr, betas=(0.9, 0.98), eps=1e-9)
