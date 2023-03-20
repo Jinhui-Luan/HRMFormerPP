@@ -12,6 +12,7 @@ class BaseOptionParser():
         self.parser.add_argument('-stride', type=int, default=16, help='data stride in training set')
 
         # network
+        self.parser.add_argument('-net', type=int, choices=[1, 2], default=1)
         self.parser.add_argument('-d_i', type=int, default=3, help='the dimision of input')
         self.parser.add_argument('-d_o', type=int, default=3, help='the dimision of output')
         self.parser.add_argument('-d_model', type=int, default=1024)

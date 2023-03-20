@@ -798,4 +798,228 @@ class Transformer1(nn.Module):
         
         return output
 
+
+class STTransformerEncoder(nn.Module):
+
+    def __init__(self, spa_enc_layer, tem_enc_layer, enc_n_layers, weight_init_name="xavier_uniform"):
+        super().__init__()
+        self.spa_layers = get_clones(spa_enc_layer, enc_n_layers)
+        self.tem_layers = get_clones(tem_enc_layer, enc_n_layers)
+        self._reset_parameters(weight_init_name)
+
+    def _reset_parameters(self, weight_init_name):
+        func = WEIGHT_INIT_DICT[weight_init_name]
+        for p in self.parameters():
+            if p.dim() > 1:
+                func(p)
+
+    def forward(self, src,
+                src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None,
+                src_pos: Optional [Tensor] = None,
+                transpose_swap: Optional[bool] = False,
+                return_attn_weights = False
+        ):
+
+        if transpose_swap:
+            bs, c, h, w = src.shape
+            src = src.flatten(2).permute(2, 0, 1)
+            if src_pos is not None:
+                src_pos = src_pos.flatten(2).permute(2, 0, 1)
+
+        output = src                                                # (bs, f, m, d_model)
+        bs, f, m, d_model = output.shape
+
+        spa_slf_attns = []
+        tem_slf_attns = []
+
+        orig_mask = src_mask
+        if orig_mask is not None and isinstance(orig_mask, list):
+            assert len(orig_mask) == len(self.spa_layers)
+        elif orig_mask is not None:
+            orig_mask = [src_mask for _ in range(len(self.spa_layers))]
+
+        for i in range(len(self.spa_layers)):
+            if orig_mask is not None:
+                mask = orig_mask[i]
+                # mask must be tiled to num_heads of the transformer
+                bsz, n, n = mask.shape
+                n_heads = self.spa_layers[i].n_heads
+                mask = mask.unsqueeze(1)
+                mask = mask.repeat(1, n_heads, 1, 1)
+                mask = mask.view(bsz * n_heads, n, n)
+            output = output.reshape(bs*f, m, d_model).permute(1, 0, 2)                                                                                  # (m, bs*f, d_model)                                                 
+            output, spa_slf_attn_weights = self.spa_layers[i](output, src_mask=src_mask, src_key_padding_mask=src_key_padding_mask, src_pos=src_pos)    # (m, bs*f, d_model)
+            output = output.reshape(bs*m, f, d_model).permute(1, 0, 2)                                                                                  # (f, bs*m, d_model)
+            output, tem_slf_attn_weights = self.tem_layers[i](output, src_mask=src_mask, src_key_padding_mask=src_key_padding_mask, src_pos=src_pos)    # (f, bs*m, d_model)
+            if return_attn_weights:
+                spa_slf_attns.append(spa_slf_attn_weights)
+                tem_slf_attns.append(tem_slf_attn_weights)
+
+        output = output.reshape(f, bs, m, d_model).permute(1, 0, 2, 3)          # (bs, f, m, d_model)
+        if transpose_swap:
+            output = output.permute(1, 2, 0).view(bs, c, h, w).contiguous()
+
+        if return_attn_weights:
+            return output, torch.stack(spa_slf_attns), torch.stack(tem_slf_attns)
+        else:
+            return output, None, None
+        
+
+class Transformer2(nn.Module):
+    ''' A sequence to sequence model with attention mechanism. '''
+
+    def __init__(self, args):
+
+        super().__init__()
+
+        self.spa_emb = args.spa_emb
+        self.tem_emb = args.tem_emb
+        self.spa_n_q = args.spa_n_q
+
+        if self.spa_emb:
+            self.spatial_embedding = SpatialEmbedding(
+                d_i=args.d_i,
+                d_h1=args.d_h1,
+                d_h2=args.d_h2,
+                d_h3=args.d_h3,
+                d_o=args.d_model,
+                k=args.k
+            )
+        else:
+            self.spatial_embedding = GenericMLP(
+                input_dim=args.d_i,
+                hidden_dims=[args.d_model, args.d_ffn],
+                output_dim=args.d_model,
+                norm_name=args.norm_name,
+                activation=args.activation, 
+                use_conv=True
+            )
+
+        if self.tem_emb:
+            self.temporal_embedding = TemporalEmbedding(
+                d_i=args.d_i,
+                d_h1=args.d_h1,
+                d_h2=args.d_h2,
+                d_h3=args.d_h3,
+                d_o=args.d_model,
+                l=args.l
+            )
+        else:
+            self.enc_embedding = GenericMLP(
+                input_dim=args.d_i,
+                hidden_dims=[args.d_model, args.d_ffn],
+                output_dim=args.d_model,
+                norm_name=args.norm_name,
+                activation=args.activation, 
+                use_conv=True
+            )
+
+        # self.enc_pos_embedding = PositionEmbeddingLearned(
+        #     d_i=args.d_i,
+        #     d_h1=args.d_h1,
+        #     d_h2=args.d_h2, 
+        #     d_o=args.d_model
+        # )
+    
+        self.spa_enc_layer = TransformerEncoderLayer(
+            d_model=args.d_model,
+            d_ffn=args.d_ffn,
+            n_heads=args.n_heads,
+            dropout=args.dropout,
+            activation=args.activation,
+            pre_norm=args.pre_norm,
+            norm_name=args.norm_name
+        )
+
+        self.tem_enc_layer = TransformerEncoderLayer(
+            d_model=args.d_model,
+            d_ffn=args.d_ffn,
+            n_heads=args.n_heads,
+            dropout=args.dropout,
+            activation=args.activation,
+            pre_norm=args.pre_norm,
+            norm_name=args.norm_name
+        )
+
+        self.encoder = STTransformerEncoder(
+            spa_enc_layer=self.spa_enc_layer, 
+            tem_enc_layer=self.tem_enc_layer,
+            enc_n_layers=args.enc_n_layers
+        )
+
+        self.query_embed = nn.Embedding(args.spa_n_q, args.d_model)
+
+        self.dec_layer = TransformerDecoderLayer(
+            d_model=args.d_model,
+            d_ffn=args.d_ffn,
+            n_heads=args.n_heads,
+            dropout=args.dropout,
+            activation=args.activation,
+            pre_norm=args.pre_norm,
+            norm_name=args.norm_name
+        )
+
+        self.decoder = TransformerDecoder(
+            dec_layer=self.dec_layer,
+            dec_n_layers=args.dec_n_layers
+        )
+
+        self.trg_prj = nn.Linear(args.d_model, args.d_o, bias=False)
+
+
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p) 
+
+        'To facilitate the residual connections, the dimensions of all module outputs shall be the same.'
+
+
+    def forward(self, xyz, encoder_only=False):
+        '''
+        xyz: the 3D coordinates of input marker with size of (bs, f, m, 3)
+        '''
+        bs, f, m, d_i = xyz.shape
+
+        src_pos = None
+
+        if self.spa_emb:
+            spa_emb_features = self.spatial_embedding(xyz.reshape(bs*f, m, d_i))
+            # Input: (bs*f, m, d_i), Output: (bs*f, d_model, m)                                        
+        else:
+            spa_emb_features = self.enc_embedding(xyz.reshape(bs*f, m, d_i).permute(0, 2, 1))
+            # Input: (bs*f, d_i, m), Output: (bs*f, d_model, m)                           
+
+        if self.tem_emb:
+            tem_emb_features = self.temporal_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i))
+            # Input: (bs*m, f, d_i), Output: (bs*m, d_model, f)                   
+        else:
+            tem_emb_features = self.enc_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i).permute(0, 2, 1))
+            # Input: (bs*m, d_i, f), Output: (bs*m, d_model, f)       
+
+        # nn.MultiHeadAttention in encoder expects features of size (N, B, C)
+        spa_emb_features = spa_emb_features.permute(0, 2, 1).reshape(bs, f, m, -1)                          # (bs, f, m, d_model)
+        tem_emb_features = tem_emb_features.reshape(bs, m, -1, f).permute(0, 3, 1, 2)                       # (bs, f, m, d_model)
+        emb_features =  spa_emb_features + tem_emb_features                                                 # (bs, f, m, d_model)
+
+        enc_features = self.encoder(emb_features, src_pos=src_pos)[0]                                       # (bs, f, m, d_model)
+                                                
+        if encoder_only:
+            return self.trg_prj(enc_features)                                                               # (bs, f, m, d_o)
+
+        # initialize pose query
+        trg_pos = self.query_embed.weight                                                                   # (spa_n_q, d_model)
+        trg_pos = trg_pos.unsqueeze(1).repeat(1, bs*f, 1)                                                   # (spa_n_q, bs*f, d_model)                                
+        trg = torch.zeros_like(trg_pos)                                                                     # (spa_n_q, bs*f, d_model)  
+ 
+        # nn.MultiHeadAttention in decoder expects features of size (N, B, C)
+        enc_features = enc_features.reshape(bs*f, m, -1).permute(1, 0, 2)                                   # (m, bs*f, d_model)
+        dec_features = self.decoder(trg, enc_features, src_pos=src_pos, trg_pos=trg_pos)[0]                 # (spa_n_q, bs*f, d_model)
+        dec_features = dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 2, 0, 3)                    # (bs, tem_n_q, spa_n_q, d_model)
+ 
+        output = self.trg_prj(dec_features)                                                                 # (bs, tem_n_q, spa_n_q, d_o)
+        
+        return output
+
+
     

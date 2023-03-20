@@ -283,12 +283,12 @@ def temporal_smooth_loss(y, rate, criterion):
     child3 = [7, 8, 10, 11, 20, 21, 22, 23]
 
     loss = 0
-    for i in range(1, y.shape[1]):
+    for i in range(y.shape[1]-1):
         for j, part in enumerate([root, child1, child2, child3]):
             # print(i, part, rate ** i)
             for idx in part:
                 # print(idx)
-                l = criterion(y[:, i, idx, :], y[:, i-1, idx, :]) * rate ** j
+                l = criterion(y[:, i+1, idx, :], y[:, i, idx, :]) * rate ** j
                 # IPython.embed()
                 loss += l
         
@@ -298,7 +298,7 @@ def temporal_smooth_loss(y, rate, criterion):
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
     criterion_mse = nn.MSELoss().to(device)
     criterion_cd = ChamferDistance().to(device)
-    smpl_model_path = os.path.join(args.basic_path, 'model_m.pkl')   
+    smpl_model_path = os.path.join(args.data_path, 'model_m.pkl')   
     smpl_model = SMPLModel_torch(smpl_model_path, device) 
 
     # train from scratch or continue
@@ -422,7 +422,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
         l_cd = args.lambda5 * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-        l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
+        l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
         # IPython.embed()
@@ -492,7 +492,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
             l_cd = args.lambda5  * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-            l_ts = args.lambda6 * temporal_smooth_loss(theta_pred, args.rate, criterion_mse)
+            l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
             loss.append(l)
@@ -527,13 +527,12 @@ def write_ply(save_path, vertex, rgb=None):
 
 def write_mesh(save_path, vertex, face, rgb=None):
     """
-    This function generates a SMPL mesh with vertex
-    
-    Parameter:
+    Paramerer:
     ---------
-    basic_path: path of surreal dataset
-    mesh_path: the path to save mesh
-
+    save_path : path to save
+    vertex: point cloud with size of (n_points, 3)
+    face: vertex connectivity of SMPL mesh
+    rgb: RGB information of each point with size of (n_point, 3)
     """
     mesh_ref = pymesh.load_mesh("./template_color.ply")
 
@@ -550,7 +549,7 @@ def write_mesh(save_path, vertex, face, rgb=None):
 
 def test(model, dataloader_test, device, args):
     # criterion = nn.MSELoss().to(device)
-    smpl_model_path = os.path.join(args.basic_path, 'model_m.pkl')   
+    smpl_model_path = os.path.join(args.data_path, 'model_m.pkl')   
     smpl_model = SMPLModel_torch(smpl_model_path, device) 
     face = smpl_model.faces
     # print(face, face.shape)
@@ -629,7 +628,10 @@ def main():
     args.d_h1 = args.d_h2 // 4
     args.d_ffn = args.d_model * 2
 
-    model = transformer.Transformer1(args).to(device)
+    if args.net == 1:
+        model = transformer.Transformer1(args).to(device)
+    elif args.net == 2:
+        model = transformer.Transformer2(args).to(device)
 
     args.exp_path = os.path.join(args.output_path, args.exp_name)
     args.log_save_path = os.path.join(args.exp_path, 'logs')
