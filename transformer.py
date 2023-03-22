@@ -856,7 +856,7 @@ class STTransformerEncoder(nn.Module):
                 spa_slf_attns.append(spa_slf_attn_weights)
                 tem_slf_attns.append(tem_slf_attn_weights)
 
-        output = output.reshape(f, bs, m, d_model).permute(1, 0, 2, 3)          # (bs, f, m, d_model)
+        output = output.reshape(bs*f, m, d_model).permute(1, 0, 2)                                                           # (m, bs*f, d_model)
         if transpose_swap:
             output = output.permute(1, 2, 0).view(bs, c, h, w).contiguous()
 
@@ -1002,10 +1002,10 @@ class Transformer2(nn.Module):
         tem_emb_features = tem_emb_features.reshape(bs, m, -1, f).permute(0, 3, 1, 2)                       # (bs, f, m, d_model)
         emb_features =  spa_emb_features + tem_emb_features                                                 # (bs, f, m, d_model)
 
-        enc_features = self.encoder(emb_features, src_pos=src_pos)[0]                                       # (bs, f, m, d_model)
+        enc_features = self.encoder(emb_features, src_pos=src_pos)[0]                                       # (m, bs*f, d_model)
                                                 
         if encoder_only:
-            return self.trg_prj(enc_features)                                                               # (bs, f, m, d_o)
+            return self.trg_prj(enc_features.permute(1, 0, 2)).reshape(bs, f, m, -1)                        # (bs, f, m, d_o)
 
         # initialize pose query
         trg_pos = self.query_embed.weight                                                                   # (spa_n_q, d_model)
@@ -1013,11 +1013,9 @@ class Transformer2(nn.Module):
         trg = torch.zeros_like(trg_pos)                                                                     # (spa_n_q, bs*f, d_model)  
  
         # nn.MultiHeadAttention in decoder expects features of size (N, B, C)
-        enc_features = enc_features.reshape(bs*f, m, -1).permute(1, 0, 2)                                   # (m, bs*f, d_model)
         dec_features = self.decoder(trg, enc_features, src_pos=src_pos, trg_pos=trg_pos)[0]                 # (spa_n_q, bs*f, d_model)
-        dec_features = dec_features.reshape(self.spa_n_q, bs, f, -1).permute(1, 2, 0, 3)                    # (bs, tem_n_q, spa_n_q, d_model)
  
-        output = self.trg_prj(dec_features)                                                                 # (bs, tem_n_q, spa_n_q, d_o)
+        output = self.trg_prj(dec_features.permute(1, 0, 2)).reshape(bs, f, self.spa_n_q, -1)               # (bs, f, spa_n_q, d_o)
         
         return output
 
