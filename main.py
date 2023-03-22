@@ -165,7 +165,7 @@ def attach_placeholder(X):
     return torch.cat((placeholder, X), dim=1)
 
 
-def get_data_loader(data_path, batch_size, mode, m, f, stride):
+def get_data_loader(data_path, exp_path, batch_size, mode, m, f, stride):
     data = torch.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'))
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
     
@@ -181,6 +181,8 @@ def get_data_loader(data_path, batch_size, mode, m, f, stride):
     #     marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
 
     print('{} dataset shape: {}.'.format(mode, marker.shape).capitalize())
+    with open(os.path.join(exp_path, 'parameters.txt'), 'a') as f:
+        f.write('{} dataset shape: {}.\n'.format(mode, marker.shape).capitalize())
 
     dataset = MyDataset(marker, theta, beta, joint, theta_max, theta_min)
     if mode == 'train':
@@ -651,13 +653,16 @@ def main():
 
         print(args)
         parser.save(os.path.join(args.exp_path, 'parameters.txt'))
+
+        dl_train = get_data_loader(args.data_path, args.exp_path, args.bs, 'train', args.m, args.f, args.stride)
+        dl_val = get_data_loader(args.data_path, args.exp_path, args.bs, 'val', args.m, args.f, 1)
+
         with open(os.path.join(args.exp_path, 'parameters.txt'), 'a') as f:
             f.writelines('---------- model ---------' + '\n')
             f.write(str(model))
             f.writelines('----------- end ----------' + '\n')
         
-        dl_train = get_data_loader(args.data_path, args.bs, 'train', args.m, args.f, args.stride)
-        dl_val = get_data_loader(args.data_path, args.bs, 'val', args.m, args.f, 1)
+
 
         # create optimizer and scheduler
         optimizer = AdamW(model.parameters(), lr=args.base_lr, betas=(0.9, 0.98), eps=1e-9)
