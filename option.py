@@ -48,7 +48,8 @@ class BaseOptionParser():
         self.parser.add_argument('-lambda3', type=float, default=1.0, help='weight of l_v in loss function')
         self.parser.add_argument('-lambda4', type=float, default=1.0, help='weight of l_reg in loss function')
         self.parser.add_argument('-lambda5', type=float, default=1.0, help='weight of l_cd in loss function')
-        self.parser.add_argument('-lambda6', type=float, default=1.0, help='weight of l_ts in loss function')
+        self.parser.add_argument('-lambda6', type=float, default=1.0, help='weight of joint smooth loss')
+        self.parser.add_argument('-lambda7', type=float, default=1.0, help='weight of vertex smooth loss')
 
         # optimizer
         self.parser.add_argument('-optim', type=str, choices=['warmup', 'cosine', 'step'], default='cosine')

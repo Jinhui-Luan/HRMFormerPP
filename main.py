@@ -271,30 +271,48 @@ def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
     return loss / (n1 + n2)
 
 
+# def temporal_smooth_loss(y, rate, criterion):
+#     '''
+#     y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
+#     rate: the rate of the weight between parent and child nodes
+#     criterion: the criterion for calculating loss, e.g. nn.MESLoss
+#     return: the temporal smooth term of loss
+#     '''
+#     _, f, j, _ = y.shape
+#     root = [0, 3, 6, 9]
+#     child1 = [1, 2, 12, 13, 14, 16, 17]
+#     child2 = [4, 5, 15, 18, 19]
+#     child3 = [7, 8, 10, 11, 20, 21, 22, 23]
+
+#     loss = 0
+#     for i in range(y.shape[1]-1):
+#         for j, part in enumerate([root, child1, child2, child3]):
+#             # print(i, part, rate ** i)
+#             for idx in part:
+#                 # print(idx)
+#                 l = criterion(y[:, i+1, idx, :], y[:, i, idx, :]) * rate ** j
+#                 # IPython.embed()
+#                 loss += l
+        
+#     return loss / ((f-1) * j)
+
+
 def temporal_smooth_loss(y, rate, criterion):
     '''
-    y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
+    y: the predicted position of joint or vertex with size of (bs, f, n, 3)
     rate: the rate of the weight between parent and child nodes
     criterion: the criterion for calculating loss, e.g. nn.MESLoss
     return: the temporal smooth term of loss
     '''
-    _, f, j, _ = y.shape
-    root = [0, 3, 6, 9]
-    child1 = [1, 2, 12, 13, 14, 16, 17]
-    child2 = [4, 5, 15, 18, 19]
-    child3 = [7, 8, 10, 11, 20, 21, 22, 23]
+    _, f, n, _ = y.shape
 
     loss = 0
-    for i in range(y.shape[1]-1):
-        for j, part in enumerate([root, child1, child2, child3]):
-            # print(i, part, rate ** i)
-            for idx in part:
-                # print(idx)
-                l = criterion(y[:, i+1, idx, :], y[:, i, idx, :]) * rate ** j
-                # IPython.embed()
-                loss += l
+    for i in range(1, y.shape[1]-1):
+        y_ave = (y[:, i-1, :, :] + y[:, i+1, :, :]) / 2
+        l = criterion(y[:, i, :, :], y_ave)
+        loss += l
         
-    return loss / ((f-1) * j)
+    return loss / ((f-2) * n)
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
@@ -398,8 +416,8 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         marker = data['marker'].to(device)                          # (bs, f, m, 3)
         theta = data['theta'].to(device)                            # (bs, f, spa_n_q, 3)
         beta = data['beta'].to(device)                              # (bs, f, 10)
-        theta_max = data['theta_max'].to(device)                    # (spa_n_q, 3)
-        theta_min = data['theta_min'].to(device)                    # (spa_n_q, 3)
+        theta_max = data['theta_max'].to(device)                    # (bs, spa_n_q, 3)
+        theta_min = data['theta_min'].to(device)                    # (bs, spa_n_q, 3)
         # vertex = data['vertex'].to(device)                          # (bs, f, 6890, 3)
         # joint = data['joint'].to(device)                            # (bs, f, 24, 3)
 
@@ -424,7 +442,8 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
         l_cd = args.lambda5 * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-        l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
+        l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse) \
+            + args.lambda7 * temporal_smooth_loss(vertex_pred.reshape(bs, f, 6890, 3), args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
         # IPython.embed()
@@ -494,7 +513,8 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
             l_cd = args.lambda5  * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-            l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
+            l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)\
+                + args.lambda7 * temporal_smooth_loss(vertex_pred.reshape(bs, f, 6890, 3), args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
             loss.append(l)
@@ -655,7 +675,7 @@ def main():
         parser.save(os.path.join(args.exp_path, 'parameters.txt'))
 
         dl_train = get_data_loader(args.data_path, args.exp_path, args.bs, 'train', args.m, args.f, args.stride)
-        dl_val = get_data_loader(args.data_path, args.exp_path, args.bs, 'val', args.m, args.f, 1)
+        dl_val = get_data_loader(args.data_path, args.exp_path, args.bs, 'val', args.m, args.f, 2)
 
         with open(os.path.join(args.exp_path, 'parameters.txt'), 'a') as f:
             f.writelines('---------- model ---------' + '\n')
