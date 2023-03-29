@@ -165,15 +165,24 @@ def attach_placeholder(X):
     return torch.cat((placeholder, X), dim=1)
 
 
+def random_subset(X, stride):
+    l = X.shape[0]
+
+    idx = torch.randint(l, [l, ])[:l//stride]
+    return X[idx]
+    
+
+
+
 def get_data_loader(data_path, exp_path, batch_size, mode, m, f, stride):
     data = torch.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'))
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
     
-    marker = torch.Tensor(data['marker']).reshape(-1, f, m, 3)[::stride].to(torch.float32)              # (n_seq, f, m, 3)
-    theta = torch.Tensor(data['theta']).reshape(-1, f, 24, 3)[::stride].to(torch.float32)               # (n_seq, f, j, 3)
-    beta = torch.Tensor(data['beta']).reshape(-1, f, 10)[::stride].to(torch.float32)                    # (n_seq, f, 10)
-    # vertex = torch.Tensor(data['vertex']).reshape(-1, f, 6890, 3)[::stride].to(torch.float32)           # (n_seq, f, v, 3)
-    joint = torch.Tensor(data['joint']).reshape(-1, f, 24, 3)[::stride].to(torch.float32)               # (n_seq, f, j, 3)
+    marker = random_subset(torch.Tensor(data['marker']).reshape(-1, f, m, 3).to(torch.float32), stride)              # (n_seq, f, m, 3)
+    theta = random_subset(torch.Tensor(data['theta']).reshape(-1, f, 24, 3).to(torch.float32), stride)               # (n_seq, f, j, 3)
+    beta = random_subset(torch.Tensor(data['beta']).reshape(-1, f, 10).to(torch.float32), stride)                    # (n_seq, f, 10)
+    # vertex = random_subset(torch.Tensor(data['vertex']).reshape(-1, f, 6890, 3).to(torch.float32), stride)           # (n_seq, f, v, 3)
+    joint = random_subset(torch.Tensor(data['joint']).reshape(-1, f, 24, 3).to(torch.float32), stride)               # (n_seq, f, j, 3)
     theta_max = torch.Tensor(data['theta_max']).to(torch.float32)                                       # (j, 3)
     theta_min = torch.Tensor(data['theta_min']).to(torch.float32)                                       # (j, 3)
 
@@ -271,48 +280,48 @@ def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
     return loss / (n1 + n2)
 
 
-# def temporal_smooth_loss(y, rate, criterion):
-#     '''
-#     y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
-#     rate: the rate of the weight between parent and child nodes
-#     criterion: the criterion for calculating loss, e.g. nn.MESLoss
-#     return: the temporal smooth term of loss
-#     '''
-#     _, f, j, _ = y.shape
-#     root = [0, 3, 6, 9]
-#     child1 = [1, 2, 12, 13, 14, 16, 17]
-#     child2 = [4, 5, 15, 18, 19]
-#     child3 = [7, 8, 10, 11, 20, 21, 22, 23]
-
-#     loss = 0
-#     for i in range(y.shape[1]-1):
-#         for j, part in enumerate([root, child1, child2, child3]):
-#             # print(i, part, rate ** i)
-#             for idx in part:
-#                 # print(idx)
-#                 l = criterion(y[:, i+1, idx, :], y[:, i, idx, :]) * rate ** j
-#                 # IPython.embed()
-#                 loss += l
-        
-#     return loss / ((f-1) * j)
-
-
 def temporal_smooth_loss(y, rate, criterion):
     '''
-    y: the predicted position of joint or vertex with size of (bs, f, n, 3)
+    y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
     rate: the rate of the weight between parent and child nodes
     criterion: the criterion for calculating loss, e.g. nn.MESLoss
     return: the temporal smooth term of loss
     '''
-    _, f, n, _ = y.shape
+    _, f, j, _ = y.shape
+    root = [0, 3, 6, 9]
+    child1 = [1, 2, 12, 13, 14, 16, 17]
+    child2 = [4, 5, 15, 18, 19]
+    child3 = [7, 8, 10, 11, 20, 21, 22, 23]
 
     loss = 0
-    for i in range(1, y.shape[1]-1):
-        y_ave = (y[:, i-1, :, :] + y[:, i+1, :, :]) / 2
-        l = criterion(y[:, i, :, :], y_ave)
-        loss += l
+    for i in range(y.shape[1]-1):
+        for j, part in enumerate([root, child1, child2, child3]):
+            # print(i, part, rate ** i)
+            for idx in part:
+                # print(idx)
+                l = criterion(y[:, i+1, idx, :], y[:, i, idx, :]) * rate ** j
+                # IPython.embed()
+                loss += l
         
-    return loss / ((f-2) * n)
+    return loss / ((f-1) * j)
+
+
+# def temporal_smooth_loss(y, rate, criterion):
+#     '''
+#     y: the predicted position of joint or vertex with size of (bs, f, n, 3)
+#     rate: the rate of the weight between parent and child nodes
+#     criterion: the criterion for calculating loss, e.g. nn.MESLoss
+#     return: the temporal smooth term of loss
+#     '''
+#     _, f, n, _ = y.shape
+
+#     loss = 0
+#     for i in range(1, y.shape[1]-1):
+#         y_ave = (y[:, i-1, :, :] + y[:, i+1, :, :]) / 2
+#         l = criterion(y[:, i, :, :], y_ave)
+#         loss += l
+        
+#     return loss / ((f-2) * n)
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
@@ -442,8 +451,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
         l_cd = args.lambda5 * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-        l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse) \
-            + args.lambda7 * temporal_smooth_loss(vertex_pred.reshape(bs, f, 6890, 3), args.rate, criterion_mse)
+        l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
         l = l_d + l_j + l_v + l_reg + l_cd + l_ts
 
         # IPython.embed()
@@ -513,8 +521,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
             l_cd = args.lambda5  * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-            l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)\
-                + args.lambda7 * temporal_smooth_loss(vertex_pred.reshape(bs, f, 6890, 3), args.rate, criterion_mse)
+            l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
             l = l_d + l_j + l_v + l_reg + l_cd + l_ts
             
             loss.append(l)
