@@ -178,16 +178,24 @@ def get_data_loader(data_path, exp_path, batch_size, mode, m, f, stride):
     data = torch.load(os.path.join(data_path, mode + '_' + str(m) + '.pt'))
     print('Successfully load data from ' + mode + '_' + str(m) + '.pt!')
     
-    marker = random_subset(torch.Tensor(data['marker']).reshape(-1, f, m, 3).to(torch.float32), stride)              # (n_seq, f, m, 3)
-    theta = random_subset(torch.Tensor(data['theta']).reshape(-1, f, 24, 3).to(torch.float32), stride)               # (n_seq, f, j, 3)
-    beta = random_subset(torch.Tensor(data['beta']).reshape(-1, f, 10).to(torch.float32), stride)                    # (n_seq, f, 10)
-    # vertex = random_subset(torch.Tensor(data['vertex']).reshape(-1, f, 6890, 3).to(torch.float32), stride)           # (n_seq, f, v, 3)
-    joint = random_subset(torch.Tensor(data['joint']).reshape(-1, f, 24, 3).to(torch.float32), stride)               # (n_seq, f, j, 3)
+    marker = torch.Tensor(data['marker']).reshape(-1, f, m, 3).to(torch.float32)              # (n_seq, f, m, 3)
+    theta = torch.Tensor(data['theta']).reshape(-1, f, 24, 3).to(torch.float32)               # (n_seq, f, j, 3)
+    beta = torch.Tensor(data['beta']).reshape(-1, f, 10).to(torch.float32)                    # (n_seq, f, 10)
+    # vertex = torch.Tensor(data['vertex']).reshape(-1, f, 6890, 3).to(torch.float32)           # (n_seq, f, v, 3)
+    joint = torch.Tensor(data['joint']).reshape(-1, f, 24, 3).to(torch.float32)               # (n_seq, f, j, 3)
     theta_max = torch.Tensor(data['theta_max']).to(torch.float32)                                       # (j, 3)
     theta_min = torch.Tensor(data['theta_min']).to(torch.float32)                                       # (j, 3)
 
     # for i in range(marker.shape[0]):
     #     marker[i, :, :, :] = marker[i, :, torch.randperm(marker.shape[2]), :]
+
+    l = marker.shape[0]
+    idx = torch.randint(l, [l, ])[:l//stride]
+    marker = marker[idx]
+    theta = theta[idx]
+    beta = beta[idx]
+    # vertex = vertex[idx]
+    joint = joint[idx]
 
     print('{} dataset shape: {}.'.format(mode, marker.shape).capitalize())
     with open(os.path.join(exp_path, 'parameters.txt'), 'a') as f:
