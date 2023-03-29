@@ -146,11 +146,14 @@ class CosineScheduledOptim():
 
 
 def init_random_seed(seed):
+    os.environ['PYTHONHASHSEED'] = str(seed)
     torch.manual_seed(seed)
-    torch.backends.cudnn.benchmark = False
-    # torch.set_deterministic(True)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
 
 def weight_init(m):
@@ -163,15 +166,6 @@ def attach_placeholder(X):
     ''' add <start> and <end> placeholder '''
     placeholder = torch.zeros((X.shape[0], 1, X.shape[2]), dtype=torch.float32, device=X.device, requires_grad=True)
     return torch.cat((placeholder, X), dim=1)
-
-
-def random_subset(X, stride):
-    l = X.shape[0]
-
-    idx = torch.randint(l, [l, ])[:l//stride]
-    return X[idx]
-    
-
 
 
 def get_data_loader(data_path, exp_path, batch_size, mode, m, f, stride):
