@@ -204,9 +204,9 @@ def get_data_loader(data_path, exp_path, batch_size, mode, m, f, stride):
     return dataloader
 
 
-def print_performances(header, loss, mpjpe, mpvpe, lr, start_time):
-    print(' - {:12} loss: {:6.4f}, mpjpe: {:6.4f}, mpvpe: {:6.4f}, lr: {:10.8f}, time cost: {:4.2f} min'.format(
-        f"({header})", loss, mpjpe, mpvpe, lr, (time.time()-start_time)/60))
+def print_performances(header, loss, mpjpe, mpvpe, jitter, lr, start_time):
+    print(' - {:12} loss: {:6.4f}, mpjpe: {:6.4f}, mpvpe: {:6.4f}, jitter: {:6.4f}, lr: {:10.8f}, time cost: {:4.2f} min'.format(
+        f"({header})", loss, mpjpe, mpvpe, jitter, lr, (time.time()-start_time)/60))
 
 
 def load_checkpoint(model, args, device, start_epoch, scheduler=None):
@@ -282,48 +282,84 @@ def chamfer_distance_loss(pc1, pc2, criterion_cd, bidirectional=True):
     return loss / (n1 + n2)
 
 
-def temporal_smooth_loss(y, rate, criterion):
+def temporal_smooth_loss1(x, rate, criterion):
     '''
-    y: the predicted pose parameters theta of SMPL model with size of (bs, f, 24, 3)
+    x: the predicted pose parameter or joint postion with size of (bs, f, 24, 3)
     rate: the rate of the weight between parent and child nodes
     criterion: the criterion for calculating loss, e.g. nn.MESLoss
     return: the temporal smooth term of loss
     '''
-    _, f, j, _ = y.shape
+    _, f, j, _ = x.shape
     root = [0, 3, 6, 9]
     child1 = [1, 2, 12, 13, 14, 16, 17]
     child2 = [4, 5, 15, 18, 19]
     child3 = [7, 8, 10, 11, 20, 21, 22, 23]
 
     loss = 0
-    for i in range(y.shape[1]-1):
+    for i in range(f-1):
         for j, part in enumerate([root, child1, child2, child3]):
             # print(i, part, rate ** i)
             for idx in part:
                 # print(idx)
-                l = criterion(y[:, i+1, idx, :], y[:, i, idx, :]) * rate ** j
+                l = criterion(x[:, i+1, idx, :], x[:, i, idx, :]) * rate ** j
                 # IPython.embed()
                 loss += l
         
     return loss / ((f-1) * j)
 
 
-# def temporal_smooth_loss(y, rate, criterion):
-#     '''
-#     y: the predicted position of joint or vertex with size of (bs, f, n, 3)
-#     rate: the rate of the weight between parent and child nodes
-#     criterion: the criterion for calculating loss, e.g. nn.MESLoss
-#     return: the temporal smooth term of loss
-#     '''
-#     _, f, n, _ = y.shape
+def temporal_smooth_loss2(x, criterion):
+    '''
+    x: the position of predicted joint or vertex with size of (bs, f, n, 3)
+    rate: the rate of the weight between parent and child nodes
+    criterion: the criterion for calculating loss, e.g. nn.MESLoss
+    return: the temporal smooth term of loss
+    '''
+    _, f, n, _ = x.shape
 
-#     loss = 0
-#     for i in range(1, y.shape[1]-1):
-#         y_ave = (y[:, i-1, :, :] + y[:, i+1, :, :]) / 2
-#         l = criterion(y[:, i, :, :], y_ave)
-#         loss += l
+    loss = 0
+    for i in range(1, f-1):
+        x_ave = (x[:, i-1, :, :] + x[:, i+1, :, :]) / 2
+        l = criterion(x[:, i, :, :], x_ave)
+        loss += l
         
-#     return loss / ((f-2) * n)
+    return loss / ((f-2) * n)
+
+
+def get_speed(x):
+    '''
+    x: the position of input marker or predicted joint or vertex with size of (bs, f, n, 3)
+    return: the average speed of x with size of (bs, f-1, n, 3)
+    '''
+
+    return x[:, 1:, :, :] - x[:, 0:-1, :, :]
+
+
+def temporal_smooth_loss3(pc1, pc2, criterion):
+    '''
+    pc1: the position of input marker with size of (bs, f, m, 3)
+    pc2: the position of predicted joint or vertex with size of (bs, f, n, 3)
+    criterion: the criterion for calculating loss, e.g. nn.MESLoss
+    return: the temporal smooth term of loss
+    '''
+    speed1 = get_speed(pc1)             # (bs, f-1, m, 3)
+    speed2 = get_speed(pc2)             # (bs, f-1, n, 3)
+    acc1 = get_speed(speed1)            # (bs, f-2, m, 3)
+    acc2 = get_speed(speed2)            # (bs, f-2, n, 3)
+
+    return criterion(acc1.pow(2).sum(dim=-1).sqrt().mean(dim=-1), acc2.pow(2).sum(dim=-1).sqrt().mean(dim=-1)) 
+
+
+def get_jitter(x):
+    '''
+    x: the position of predicted vertex with size of (bs, f, n, 3)
+    return: the average jitter of x with size of (bs, f-3, n, 3)
+    ''' 
+    speed = get_speed(x)                # (bs, f-1, n, 3)
+    acc = get_speed(speed)              # (bs, f-2, n, 3)
+    jitter = get_speed(acc)             # (bs, f-3, n, 3)
+
+    return jitter
 
 
 def train(model, dataloader_train, dataloader_val, scheduler, device, args):
@@ -352,10 +388,10 @@ def train(model, dataloader_train, dataloader_val, scheduler, device, args):
 
     if not args.resume:
         with open(log_train_file, 'w') as log_tf, open(log_valid_file, 'w') as log_vf:
-            log_tf.write('{:4}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:10}\n'.format(
-                'epoch', 'l', 'l_d', 'l_j', 'l_v', 'l_reg', 'l_cd', 'l_ts','mpjpe', 'mpvpe', 'lr'))
-            log_vf.write('{:4}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:6}, {:10}\n'.format(
-                'epoch', 'l', 'l_d', 'l_j', 'l_v', 'l_reg', 'l_cd', 'l_ts','mpjpe', 'mpvpe', 'lr'))
+            log_tf.write('{:6}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}\n'.format(
+                'epoch', 'l', 'l_d', 'l_j', 'l_v', 'l_reg', 'l_cd', 'l_ts1', 'l_ts2', 'mpjpe', 'mpvpe', 'jitter', 'lr'))
+            log_vf.write('{:6}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}, {:10}\n'.format(
+                'epoch', 'l', 'l_d', 'l_j', 'l_v', 'l_reg', 'l_cd', 'l_ts1', 'l_ts2', 'mpjpe', 'mpvpe', 'jitter', 'lr'))
 
     val_metrics = []
     
@@ -365,15 +401,15 @@ def train(model, dataloader_train, dataloader_val, scheduler, device, args):
         # train epoch
         start = time.time()
         lr = scheduler.optimizer.param_groups[0]['lr']
-        train_l, train_ld, train_lj, train_lv, train_lreg, train_lcd, train_lts, train_mpjpe, train_mpvpe = train_epoch(
+        train_l, train_ld, train_lj, train_lv, train_lreg, train_lcd, train_lts1, train_lts2 ,train_mpjpe, train_mpvpe, train_jitter = train_epoch(
             model, smpl_model, dataloader_train, scheduler, criterion_mse, criterion_cd, device, args)
-        print_performances('Training', train_l, train_mpjpe, train_mpvpe, lr, start)
+        print_performances('Training', train_l, train_mpjpe, train_mpvpe, train_jitter, lr, start)
 
         # validation epoch
         start = time.time()
-        val_l, val_ld, val_lj, val_lv, val_lreg, val_lcd, val_lts, val_mpjpe, val_mpvpe = val_epoch(
+        val_l, val_ld, val_lj, val_lv, val_lreg, val_lcd, val_lts1, val_lts2, val_mpjpe, val_mpvpe, val_jitter = val_epoch(
             model, smpl_model, dataloader_val, criterion_mse, criterion_cd, device, args)
-        print_performances('Validation', val_l, val_mpjpe, val_mpvpe, lr, start)
+        print_performances('Validation', val_l, val_mpjpe, val_mpvpe, val_jitter, lr, start)
 
         val_metric = 0.5 * val_mpjpe + 0.5 * val_mpvpe
         val_metrics.append(val_metric)
@@ -392,10 +428,10 @@ def train(model, dataloader_train, dataloader_val, scheduler, device, args):
             print(' - [Info] The model file has been saved for every {} epochs.'.format(args.interval))
 
         with open(log_train_file, 'a') as log_tf, open(log_valid_file, 'a') as log_vf:
-            log_tf.write('{:4d}: {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:10.8f}\n'.format(
-                i, train_l, train_ld, train_lj, train_lv, train_lreg, train_lcd, train_lts, train_mpjpe, train_mpvpe, lr))
-            log_vf.write('{:4d}: {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:6.4f}, {:10.8f}\n'.format(
-                i, val_l, val_ld, val_lj, val_lv, val_lreg, val_lcd, val_lts, val_mpjpe, val_mpvpe, lr))
+            log_tf.write('{:6d}: {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.8f}\n'.format(
+                i, train_l, train_ld, train_lj, train_lv, train_lreg, train_lcd, train_lts1, train_lts2, train_mpjpe, train_mpvpe, train_jitter, lr))
+            log_vf.write('{:6d}: {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.8f}\n'.format(
+                i, val_l, val_ld, val_lj, val_lv, val_lreg, val_lcd, val_lts1, val_lts2, val_mpjpe, val_mpvpe, val_jitter, lr))
 
         if not args.no_tb:
             writer.add_scalars('l',{'train': train_l, 'val': val_l}, i)
@@ -404,9 +440,11 @@ def train(model, dataloader_train, dataloader_val, scheduler, device, args):
             writer.add_scalars('l_v',{'train': train_lv, 'val': val_lv}, i)
             writer.add_scalars('l_reg',{'train': train_lreg, 'val': val_lreg}, i)
             writer.add_scalars('l_cd',{'train': train_lcd, 'val': val_lcd}, i)
-            writer.add_scalars('l_ts',{'train': train_lts, 'val': val_lts}, i)
+            writer.add_scalars('l_ts1',{'train': train_lts1, 'val': val_lts1}, i)
+            writer.add_scalars('l_ts2',{'train': train_lts2, 'val': val_lts2}, i)
             writer.add_scalars('mpjpe',{'train': train_mpjpe, 'val': val_mpjpe}, i)
             writer.add_scalars('mpvpe',{'train': train_mpvpe, 'val': val_mpvpe}, i)
+            writer.add_scalars('jitter',{'train': train_jitter, 'val': val_jitter}, i)
             writer.add_scalar('lr', lr, i)
 
 
@@ -418,9 +456,11 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
     loss_v = []                     # vertex term of loss function
     loss_reg = []                   # regularization term of loss function
     loss_cd = []                    # chamferdistance between input marker and output mesh vertex
-    loss_ts = []                    # temporal smooth term of loss function
+    loss_ts1 = []                   # temporal smooth term of loss function
+    loss_ts2 = []                   # temporal smooth term of loss function
     MPJPE = []
     MPVPE = []
+    JITTER = []
 
     desc = ' - (Training)   '
     for data in tqdm(dataloader_train, mininterval=2, desc=desc, leave=False, ncols=100):
@@ -446,6 +486,7 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
 
         mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
         mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
+        jitter = get_jitter(vertex_pred.reshape(bs, f, 6890, 3)).pow(2).sum(dim=-1).sqrt().mean()
 
         # l_d = args.lambda1 * criterion(theta_pred, theta)
         l_d = args.lambda1 * weighted_data_loss(theta_pred.reshape(bs*f, args.spa_n_q, 3), theta.reshape(bs*f, args.spa_n_q, 3), args.rate, criterion_mse)
@@ -453,8 +494,21 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
         l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
         l_cd = args.lambda5 * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-        l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
-        l = l_d + l_j + l_v + l_reg + l_cd + l_ts
+
+        # temproal smooth loss function 1
+        if args.lts == 1:
+            l_ts1 = args.lambda6 * temporal_smooth_loss1(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
+            l_ts2 = args.lambda7 * temporal_smooth_loss1(theta_pred, args.rate, criterion_mse)
+        # temporal smooth loss function 2
+        if args.lts == 2:
+            l_ts1 = args.lambda6 * temporal_smooth_loss2(joint_pred.reshape(bs, f, 24, 3), criterion_mse)
+            l_ts2 = args.lambda7 * temporal_smooth_loss2(vertex_pred.reshape(bs, f, 6890, 3), criterion_mse)
+        # temporal smooth loss function 3
+        if args.lts == 3:
+            l_ts1 = args.lambda6 * temporal_smooth_loss3(marker, joint_pred.reshape(bs, f, 24, 3), criterion_mse)
+            l_ts2 = args.lambda7 * temporal_smooth_loss3(marker, vertex_pred.reshape(bs, f, 6890, 3), criterion_mse)
+
+        l = l_d + l_j + l_v + l_reg + l_cd + l_ts1 + l_ts2
 
         # IPython.embed()
 
@@ -468,15 +522,18 @@ def train_epoch(model, smpl_model, dataloader_train, scheduler, criterion_mse, c
         loss_v.append(l_v)
         loss_reg.append(l_reg)
         loss_cd.append(l_cd)
-        loss_ts.append(l_ts)
+        loss_ts1.append(l_ts1)
+        loss_ts2.append(l_ts2)
 
         MPJPE.append(mpjpe.clone().detach())
         MPVPE.append(mpvpe.clone().detach())
+        JITTER.append(jitter.clone().detach())
     
     scheduler.epoch_step()
         
-    return torch.Tensor(loss).mean(), torch.Tensor(loss_d).mean(), torch.Tensor(loss_j).mean(), torch.Tensor(loss_v).mean(), torch.Tensor(loss_reg).mean(), \
-         torch.Tensor(loss_cd).mean(), torch.Tensor(loss_ts).mean(), torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean()
+    return torch.Tensor(loss).mean(), torch.Tensor(loss_d).mean(), torch.Tensor(loss_j).mean(), torch.Tensor(loss_v).mean(), \
+        torch.Tensor(loss_reg).mean(), torch.Tensor(loss_cd).mean(), torch.Tensor(loss_ts1).mean(), torch.Tensor(loss_ts2).mean(), \
+        torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean(), torch.Tensor(JITTER).mean()
 
 
 def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, device, args):
@@ -487,9 +544,11 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
     loss_v = []
     loss_reg = []
     loss_cd = []
-    loss_ts = []
+    loss_ts1 = []
+    loss_ts2 = []
     MPJPE = []
     MPVPE = []
+    JITTER = []
 
     desc = ' - (Validation) '
     with torch.no_grad():
@@ -516,6 +575,7 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
 
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
+            jitter = get_jitter(vertex_pred.reshape(bs, f, 6890, 3)).pow(2).sum(dim=-1).sqrt().mean()
 
             # l_d = args.lambda1 * criterion(theta_pred, theta)
             l_d = args.lambda1 * weighted_data_loss(theta_pred.reshape(bs*f, args.spa_n_q, 3), theta.reshape(bs*f, args.spa_n_q, 3), args.rate, criterion_mse)
@@ -523,8 +583,21 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             l_v = args.lambda3 * abs((vertex_pred - vertex)).sum(dim=-1).mean()
             l_reg = args.lambda4 * regularization_loss(theta_pred, theta_max, theta_min)
             l_cd = args.lambda5  * chamfer_distance_loss(marker.reshape(bs*f, m, 3), vertex_pred, criterion_cd)
-            l_ts = args.lambda6 * temporal_smooth_loss(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
-            l = l_d + l_j + l_v + l_reg + l_cd + l_ts
+
+            # temproal smooth loss function 1
+            if args.lts == 1:
+                l_ts1 = args.lambda6 * temporal_smooth_loss1(joint_pred.reshape(bs, f, 24, 3), args.rate, criterion_mse)
+                l_ts2 = args.lambda7 * temporal_smooth_loss1(theta_pred, args.rate, criterion_mse)
+            # temporal smooth loss function 2
+            if args.lts == 2:
+                l_ts1 = args.lambda6 * temporal_smooth_loss2(joint_pred.reshape(bs, f, 24, 3), criterion_mse)
+                l_ts2 = args.lambda7 * temporal_smooth_loss2(vertex_pred.reshape(bs, f, 6890, 3), criterion_mse)
+            # temporal smooth loss function 3
+            if args.lts == 3:
+                l_ts1 = args.lambda6 * temporal_smooth_loss3(marker, joint_pred.reshape(bs, f, 24, 3), criterion_mse)
+                l_ts2 = args.lambda7 * temporal_smooth_loss3(marker, vertex_pred.reshape(bs, f, 6890, 3), criterion_mse)
+
+            l = l_d + l_j + l_v + l_reg + l_cd + l_ts1 + l_ts2
             
             loss.append(l)
             loss_d.append(l_d)
@@ -532,13 +605,16 @@ def val_epoch(model, smpl_model, dataloader_val, criterion_mse, criterion_cd, de
             loss_v.append(l_v)
             loss_reg.append(l_reg)
             loss_cd.append(l_cd)
-            loss_ts.append(l_ts)
+            loss_ts1.append(l_ts1)
+            loss_ts2.append(l_ts2)
 
             MPJPE.append(mpjpe.clone().detach())
             MPVPE.append(mpvpe.clone().detach())
+            JITTER.append(jitter.clone().detach())
 
-    return torch.Tensor(loss).mean(), torch.Tensor(loss_d).mean(), torch.Tensor(loss_j).mean(), torch.Tensor(loss_v).mean(), torch.Tensor(loss_reg).mean(), \
-        torch.Tensor(loss_cd).mean(), torch.Tensor(loss_ts).mean(), torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean()
+    return torch.Tensor(loss).mean(), torch.Tensor(loss_d).mean(), torch.Tensor(loss_j).mean(), torch.Tensor(loss_v).mean(), \
+        torch.Tensor(loss_reg).mean(), torch.Tensor(loss_cd).mean(), torch.Tensor(loss_ts1).mean(), torch.Tensor(loss_ts2).mean(), \
+        torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean(), torch.Tensor(JITTER).mean()
     
 
 def write_ply(save_path, vertex, rgb=None):

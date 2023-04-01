@@ -26,9 +26,9 @@ class BaseOptionParser():
         self.parser.add_argument('-tem_n_q', type=int, default=10, help='the number of object queries')
         self.parser.add_argument('-activation', type=str, choices=['relu', 'gelu', 'leakyrelu'], default='gelu')
         self.parser.add_argument('-norm_name', type=str, choices=['bn', 'bn1d', 'id', 'ln'], default='ln')
-        self.parser.add_argument('-tem_emb', action='store_true', help='temporal embedding or mlp embedding')
-        self.parser.add_argument('-spa_emb', action='store_true', help='spatial embedding or mlp embedding')
-        self.parser.add_argument('-pre_norm', action='store_true', help='pre norm or post norm')
+        self.parser.add_argument('-tem_emb', type=bool, default=True, help='temporal embedding or mlp embedding')
+        self.parser.add_argument('-spa_emb', type=bool, default=True, help='spatial embedding or mlp embedding')
+        self.parser.add_argument('-pre_norm', type=bool, default=True, help='pre norm or post norm')
         self.parser.add_argument('-mode', type=str, choices=['train', 'test'], default='train')
 
         # train and val
@@ -37,7 +37,7 @@ class BaseOptionParser():
         self.parser.add_argument('-no_tb', action='store_true', help='do not use tensorboard')
         self.parser.add_argument('-output_path', type=str, default='./experiments/', help='path to save model and log')
         self.parser.add_argument('-exp_name', type=str, default='1_d1024', help='the experiment name to create path')
-        self.parser.add_argument('-interval', type=int, default=10, help='epoch interval to save and validation')
+        self.parser.add_argument('-interval', type=int, default=20, help='epoch interval to save and validation')
         self.parser.add_argument('-resume', action='store_true', help='train from a speicfic epoch')
         self.parser.add_argument('-start_epoch', type=int, default=-1, help='start epoch of resume training')
         self.parser.add_argument('-total_epoch', type=int, default=200)
@@ -48,8 +48,9 @@ class BaseOptionParser():
         self.parser.add_argument('-lambda3', type=float, default=1.0, help='weight of l_v in loss function')
         self.parser.add_argument('-lambda4', type=float, default=1.0, help='weight of l_reg in loss function')
         self.parser.add_argument('-lambda5', type=float, default=1.0, help='weight of l_cd in loss function')
-        self.parser.add_argument('-lambda6', type=float, default=1.0, help='weight of joint smooth loss')
-        self.parser.add_argument('-lambda7', type=float, default=1.0, help='weight of vertex smooth loss')
+        self.parser.add_argument('-lambda6', type=float, default=0.0, help='weight of l_ts1 in loss function')
+        self.parser.add_argument('-lambda7', type=float, default=0.0, help='weight of l_ts2 in loss function')
+        self.parser.add_argument('-lts', type=int, choices=[1, 2, 3], default=3, help='type of temporal smooth loss function')
 
         # optimizer
         self.parser.add_argument('-optim', type=str, choices=['warmup', 'cosine', 'step'], default='cosine')
