@@ -55,6 +55,7 @@ class BaseOptionParser():
 
         # optimizer
         self.parser.add_argument('-optim', type=str, choices=['warmup', 'cosine', 'step'], default='cosine')
+        self.parser.add_argument('-weight_decay', type=float, default=1e-2, help='weight decay of optimizer')
         self.parser.add_argument('-base_lr', type=float, default=5e-4)
         self.parser.add_argument('-step_epoch', type=int, default=20)
         self.parser.add_argument('-warmup','--n_warmup_steps', type=int, default=24000)

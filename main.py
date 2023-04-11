@@ -785,7 +785,7 @@ def main():
 
 
         # create optimizer and scheduler
-        optimizer = AdamW(model.parameters(), lr=args.base_lr, betas=(0.9, 0.98), eps=1e-9)
+        optimizer = AdamW(model.parameters(), lr=args.base_lr, betas=(0.9, 0.98), eps=1e-9, weight_decay=args.weight_decay)
         if args.optim == 'step':
             scheduler = StepScheduledOptim(optimizer, args.base_lr, args.step_epoch, args.total_epoch)
         elif args.optim == 'cosine':
