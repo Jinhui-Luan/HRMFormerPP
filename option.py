@@ -10,7 +10,7 @@ class BaseOptionParser():
         self.parser.add_argument('-m', type=int, default=67, help='the number of markers in each frame')
         self.parser.add_argument('-f', type=int, default=10, help='the number of frames in each sequence')
         self.parser.add_argument('-stride', type=int, default=16, help='data stride in training set')
-        self.parser.add_argument('-rs', type=bool, default=False, help='random subset or not')
+        self.parser.add_argument('-rs', action='store_true', help='random subset or not')
 
         # network
         self.parser.add_argument('-net', type=int, choices=[1, 2], default=1)
@@ -27,8 +27,8 @@ class BaseOptionParser():
         self.parser.add_argument('-tem_n_q', type=int, default=10, help='the number of object queries')
         self.parser.add_argument('-activation', type=str, choices=['relu', 'gelu', 'leakyrelu'], default='gelu')
         self.parser.add_argument('-norm_name', type=str, choices=['bn', 'bn1d', 'id', 'ln'], default='ln')
-        self.parser.add_argument('-tem_emb', type=bool, default=True, help='temporal embedding or mlp embedding')
-        self.parser.add_argument('-spa_emb', type=bool, default=True, help='spatial embedding or mlp embedding')
+        self.parser.add_argument('-tem_emb', action='store_true', help='temporal embedding or mlp embedding')
+        self.parser.add_argument('-spa_emb', action='store_true', help='spatial embedding or mlp embedding')
         self.parser.add_argument('-pre_norm', type=bool, default=True, help='pre norm or post norm')
         self.parser.add_argument('-mode', type=str, choices=['train', 'test'], default='train')
 

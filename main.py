@@ -663,7 +663,7 @@ def test(model, dataloader_test, device, args):
     # criterion = nn.MSELoss().to(device)
     smpl_model_path = os.path.join(args.data_path, 'model_m.pkl')   
     smpl_model = SMPLModel_torch(smpl_model_path, device) 
-    face = smpl_model.faces
+    
     # print(face, face.shape)
     # IPython.embed()
 
@@ -674,29 +674,39 @@ def test(model, dataloader_test, device, args):
     # loss_vertex = []
     MPJPE = []
     MPVPE = []
+    JITTER = []
     batch = 0
 
     desc = ' -       (Test) '
     with torch.no_grad():
         for data in tqdm(dataloader_test, mininterval=2, desc=desc, leave=False, ncols=100):
             marker = data['marker'].to(device)
+            theta = data['theta'].to(device)
             beta = data['beta'].to(device)
-            vertex = data['vertex'].to(device)
-            joint = data['joint'].to(device)
+            # vertex = data['vertex'].to(device)
+            # joint = data['joint'].to(device)
 
-            theta_pred = model(marker)
+            bs, f, m, _ = marker.shape
+            theta_pred = model(marker)                                  # (bs, f, spa_n_q, 3)
 
-            smpl_model(beta, theta_pred)
-            joint_pred = smpl_model.joints
-            vertex_pred = smpl_model.verts
+            smpl_model(beta.reshape(bs*f, 10), theta_pred.reshape(bs*f, args.spa_n_q, 3))
+            joint_pred = smpl_model.joints.to(torch.float32)            # (bs*f, 24, 3)   
+            vertex_pred = smpl_model.verts.to(torch.float32)            # (bs*f, 6890, 3)
+
+            smpl_model(beta.reshape(bs*f, 10), theta.reshape(bs*f, args.spa_n_q, 3))
+            joint= smpl_model.joints.to(torch.float32)                  # (bs*f, 24, 3)
+            vertex = smpl_model.verts.to(torch.float32)                 # (bs*f, 6890, 3)
 
             mpjpe = (joint_pred - joint).pow(2).sum(dim=-1).sqrt().mean()
             mpvpe = (vertex_pred - vertex).pow(2).sum(dim=-1).sqrt().mean()
+            jitter = get_jitter(vertex_pred.reshape(bs, f, 6890, 3)).pow(2).sum(dim=-1).sqrt().mean()
 
             MPJPE.append(mpjpe.clone().detach())
             MPVPE.append(mpvpe.clone().detach())
+            JITTER.append(jitter.clone().detach())
 
             if args.visualize:
+                face = smpl_model.faces
 
                 for i in range(marker.shape[0]):
                     # generate rgb color
@@ -725,7 +735,7 @@ def test(model, dataloader_test, device, args):
                 batch += 1
 
 
-    return torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean()
+    return torch.Tensor(MPJPE).mean(), torch.Tensor(MPVPE).mean(), torch.Tensor(JITTER).mean()
 
 
 def main():
@@ -791,9 +801,11 @@ def main():
         checkpoint = torch.load(model_path)
         model.load_state_dict(checkpoint['model'])
         print('Successfully load checkpoint of model!')
-        dl_test = get_data_loader(args.data_path, args.batch_size, 'test', args.m, args.f, 1, args.rs)
-        mpjpe, mpvpe = test(model, dl_test, device, args)
-        print(' - mpjpe: {:6.4f}, mpvpe: {:6.4f}'.format(mpjpe, mpvpe))
+        dl_test = get_data_loader(args.data_path, args.exp_path, args.bs, 'test', args.m, args.f, 10, args.rs)
+        mpjpe, mpvpe, jitter = test(model, dl_test, device, args)
+        print(' - mpjpe: {:6.4f}, mpvpe: {:6.4f}, jitter: {:6.4f}'.format(mpjpe, mpvpe, jitter))
+        with open(os.path.join(args.log_save_path, 'test.log'), 'a') as f:
+            f.write(' - mpjpe: {:6.4f}, mpvpe: {:6.4f}, jitter: {:6.4f}'.format(mpjpe, mpvpe, jitter))
 
 
 if __name__ == '__main__':

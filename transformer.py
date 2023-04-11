@@ -686,7 +686,7 @@ class Transformer1(nn.Module):
                 l=args.l
             )
         else:
-            self.enc_embedding = GenericMLP(
+            self.temporal_embedding = GenericMLP(
                 input_dim=args.d_i,
                 hidden_dims=[args.d_model, args.d_ffn],
                 output_dim=args.d_model,
@@ -762,14 +762,14 @@ class Transformer1(nn.Module):
             spa_emb_features = self.spatial_embedding(xyz.reshape(bs*f, m, d_i))
             # Input: (bs*f, m, d_i), Output: (bs*f, d_model, m)                                        
         else:
-            spa_emb_features = self.enc_embedding(xyz.reshape(bs*f, m, d_i).permute(0, 2, 1))
+            spa_emb_features = self.spatial_embedding(xyz.reshape(bs*f, m, d_i).permute(0, 2, 1))
             # Input: (bs*f, d_i, m), Output: (bs*f, d_model, m)                           
 
         if self.tem_emb:
             tem_emb_features = self.temporal_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i))
             # Input: (bs*m, f, d_i), Output: (bs*m, d_model, f)                   
         else:
-            tem_emb_features = self.enc_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i).permute(0, 2, 1))
+            tem_emb_features = self.temporal_embedding(xyz.permute(0, 2, 1, 3).reshape(bs*m, f, d_i).permute(0, 2, 1))
             # Input: (bs*m, d_i, f), Output: (bs*m, d_model, f)       
 
         # nn.MultiHeadAttention in encoder expects features of size (N, B, C)
